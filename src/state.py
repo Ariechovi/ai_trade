@@ -27,6 +27,15 @@ from typing import Annotated, Any, Dict, List, TypedDict
 from langgraph.graph.message import add_messages
 
 
+def merge_dict(left: Any, right: Any) -> Dict[str, Any]:
+    """字典合并 reducer：多个节点各写各的键时用（同名的键后者覆盖前者）。
+
+    用于 _node_errors —— 三个分析师并行失败时，各自写自己那一条记录，
+    不能用「后写覆盖先写」，必须合并。
+    """
+    return {**(left or {}), **(right or {})}
+
+
 class AgentState(TypedDict, total=False):
     # ---------- 输入 ----------
     ticker: str
@@ -58,6 +67,9 @@ class AgentState(TypedDict, total=False):
 
     # ---------- 最终产出 ----------
     final_decision: str
+
+    # ---------- 容错：节点级失败的留痕（多节点各写各的键 → merge_dict 合并）----------
+    _node_errors: Annotated[Dict[str, Any], merge_dict]
 
     # ---------- 可观测性：记录走过的节点，方便演示"图跑了哪些步" ----------
     trace: Annotated[List[str], operator.add]

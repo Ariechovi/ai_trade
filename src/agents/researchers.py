@@ -6,6 +6,11 @@
 两个 reducer 字段是关键：
   - debate_history：追加一条发言
   - debate_count  ：累加 1，供路由器判断是否达到轮数上限
+
+位置
+----
+上游（谁调用我）：graph.py
+下游（我调用谁）：agents/base.py（complete）、prompts.py（模板）、resilience.py（降级记录）
 """
 
 from __future__ import annotations
@@ -13,26 +18,51 @@ from __future__ import annotations
 from typing import Any, Callable, Dict
 
 from .. import prompts
+from ..resilience import error_record
 from .base import complete
 
 
-def _make_speaker(side: str, system_prompt: str, llm: Any) -> Callable:
-    def node(state: Dict[str, Any]) -> Dict[str, Any]:
-        text = complete(llm, system_prompt, prompts.debate_user_prompt(state, side))
+class DebaterNode:
+    """一个辩论参与者的「单次发言」节点。"""
+
+    def __init__(self, side: str, system_prompt: str, llm: Any) -> None:
+        self.side = side
+        self.system_prompt = system_prompt
+        self.llm = llm
+
+    @property
+    def name(self) -> str:
+        return f"debate:{self.side}"
+
+    def __call__(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        text = complete(
+            self.llm, self.system_prompt, prompts.debate_user_prompt(state, self.side)
+        )
         return {
-            "debate_history": [{"speaker": side, "content": text}],
+            "debate_history": [{"speaker": self.side, "content": text}],
             "debate_count": 1,
-            "last_speaker": side,
-            "trace": [f"debate:{side}"],
+            "last_speaker": self.side,
+            "trace": [f"debate:{self.side}"],
         }
 
-    node.__name__ = f"{side}_node"
-    return node
+    def degrade(self, state: Dict[str, Any], exc: BaseException) -> Dict[str, Any]:
+        """发言失败 → 用一段占位发言顶替。
+
+        ⚠️ 计数器必须照常推进。否则路由器会一直把控制权交回本节点，
+        形成死循环——图里的死循环比函数里的死循环更难察觉。
+        """
+        return {
+            "debate_history": [{"speaker": self.side, "content": f"[{self.side} 发言失败]"}],
+            "debate_count": 1,
+            "last_speaker": self.side,
+            "_node_errors": {f"debate.{self.side}": error_record("debate", self.name, exc)},
+            "trace": [f"degraded:{self.name}"],
+        }
 
 
-def make_bull_node(llm_factory: Callable[[str], Any]):
-    return _make_speaker("bull", prompts.BULL_SYSTEM, llm_factory("bull"))
+def make_bull_node(llm_factory: Callable[[str], Any]) -> DebaterNode:
+    return DebaterNode("bull", prompts.BULL_SYSTEM, llm_factory("bull"))
 
 
-def make_bear_node(llm_factory: Callable[[str], Any]):
-    return _make_speaker("bear", prompts.BEAR_SYSTEM, llm_factory("bear"))
+def make_bear_node(llm_factory: Callable[[str], Any]) -> DebaterNode:
+    return DebaterNode("bear", prompts.BEAR_SYSTEM, llm_factory("bear"))

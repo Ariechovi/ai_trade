@@ -89,6 +89,7 @@ mini-agents/
 │   ├── tools.py          # 工具定义
 │   ├── prompts.py        # 提示词模板（辩论 / 经理 + 模板函数）
 │   ├── offline_llm.py    # 离线桩模型（保证无 Key 也能跑）
+│   ├── resilience.py     # 韧性层：重试 + 降级护栏
 │   ├── runner.py         # 命令行入口
 │   └── agents/
 │       ├── specs.py      # ★ 分析师注册表：一个角色一条记录，全部设定在此
@@ -203,16 +204,66 @@ merge, debate:bull, debate:bear, debate:bull, debate:bear, manager
 为什么要 `msg_clear` 节点、为什么工具节点还要包一层 wrapper——答案都在本项目的
 `src/agents/analysts.py` 里。
 
+## 节点级容错：失败不毁全局
+
+LLM 会限流、会超时、会挂；数据源会抖。一个不做容错的系统，任何一处抖动都会让整轮分析白跑。
+
+**分工**（这是关键的设计判断）：
+
+| 关注点 | 放在哪 | 为什么 |
+|---|---|---|
+| **重试** | `resilience.GuardedNode` 包装器 | 横切关注点，每个 I/O 节点都要 |
+| **降级** | 各节点自己的 `degrade()` | 业务语义，每个节点降级方式不同 |
+
+```python
+# src/graph.py —— 只给会做 I/O 的节点套护栏，纯函数节点不套
+graph.add_node(spec.role, guarded(AnalystLLMNode(...)))
+graph.add_node(f"msg_clear_{spec.role}", AnalystReportNode(spec))   # 纯函数，不套
+```
+
+**执行流程**：
+
+```
+调用节点 → 失败且可重试且还有预算 → 指数退避后重试
+         → 不可重试 / 重试用尽   → node.degrade() 产出降级结果
+```
+
+也就是说：**异常永远不会穿透到图外**。最坏情况是一个降级结果，工作流其余部分照常跑完。
+
+**三个必须记住的细节**（也是自检里专门验证的）：
+
+1. **降级也要推进计数器**。辩论节点失败时如果不推进 `debate_count`，路由器会一直把控制权交回它，形成死循环——图里的死循环比函数里的死循环更难察觉。
+2. **不可重试的错误立即降级**。参数错误、鉴权失败重试多少次都没用。
+3. **降级是局部的**。技术面挂了，基本面、消息面和最终结论照常产出，并把故障记进 `_node_errors`。
+
+实测一次（让技术面分析师彻底失败）：
+
+```
+[重试] llm:technical 第 1 次失败(connection timeout (injected))，0.00s 后重试
+[重试] llm:technical 第 2 次失败(connection timeout (injected))，0.00s 后重试
+[降级] llm:technical 重试无果，转入降级路径
+
+技术面报告 -> [技术面分析师调用失败] 本段分析不可用，其余节点的结论不受影响。
+基本面报告 -> 正常
+最终结论   -> 正常产出
+_node_errors -> {"technical": {"stage": "llm", "type": "RuntimeError", "message": "..."}}
+```
+
+与 V3 的对照：`GuardedNode` ≈ `core/utils/retry.py` + `base.py:is_retryable_llm_error()`；
+`degrade()` ≈ `builder.py:2083` 的 degraded 分支 + `_node_errors`；
+`quality_gate.py` 则是更进一步——连「报告质量不合格」也算一种失败。
+
 ## 验证
 
-### 自检：33/33 通过
+### 自检：49/49 通过
 
 ```bash
 python scripts/selfcheck.py
 ```
 
 覆盖：配置降级、数据可复现、工具返回、端到端跑通、辩论计数严格等于「轮数 × 2」、
-并行扇入、不同标的数据不串味、工具循环每一步可见且顺序正确、工具轮数正确落库。
+并行扇入、不同标的数据不串味、工具循环每一步可见且顺序正确、工具轮数正确落库，
+以及**故障注入**下的重试 / 降级 / 不阻断 / 不死循环。
 
 ### 辩论轮数消融
 

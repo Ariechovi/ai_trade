@@ -26,6 +26,11 @@ def _field(obj: Any, name: str, default: Any = None) -> Any:
     return getattr(obj, name, default)
 
 
+def tool_call_id(call: Any) -> str:
+    """取出 tool_call 的 id（降级时也要和请求配对，否则模型会报错）。"""
+    return _field(call, "id", "call_0") or "call_0"
+
+
 def extract_text(message: Any) -> str:
     """从模型响应里取出纯文本（兼容 content 为字符串或分块列表）。"""
     content = getattr(message, "content", message)
@@ -71,7 +76,7 @@ def execute_tool_calls(tool_map: Dict[str, Any], tool_calls: List[Any]) -> List[
     for call in tool_calls or []:
         name = _field(call, "name", "")
         args = _field(call, "args", {}) or {}
-        call_id = _field(call, "id", "call_0") or "call_0"
+        call_id = tool_call_id(call)
         if name not in tool_map:
             results.append(ToolMessage(content=f"未知工具：{name}", tool_call_id=call_id))
             continue

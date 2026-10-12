@@ -72,6 +72,11 @@ def main() -> None:
         for role in ROLES
     }
     print(f"\n【工具轮数】{counts}")
+    errors = state.get("_node_errors") or {}
+    if errors:
+        print("\n【降级节点】")
+        for key, info in errors.items():
+            print(f"  - {key}: [{info.get('stage')}] {info.get('type')}: {info.get('message')}")
     print("\n【最终结论】\n" + str(state.get("final_decision", "")))
 
 

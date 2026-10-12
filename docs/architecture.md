@@ -117,3 +117,52 @@ analyst_<role>  ──┬─(有 tool_calls 且未超上限)─> tools_<role> �
 - 可对单个工具节点做超时、重试、降级
 - 可对危险工具（下单、写库）插入人工审批
 - 可配合 LangGraph 的持久化做断点续跑与回放
+
+## 八、节点级容错（失败不毁全局）
+
+### 分工：重试是横切的，降级是业务的
+
+| 关注点 | 放在哪 | 理由 |
+|---|---|---|
+| 重试 | `resilience.GuardedNode`（包装器） | 每个 I/O 节点都要，属于横切关注点 |
+| 降级 | 各节点自己的 `degrade(state, exc)` | 每个节点的降级方式不同，属于业务语义 |
+
+```python
+class GuardedNode:
+    def __call__(self, state):
+        for attempt in range(1, self.max_attempts + 1):
+            try:
+                return self.node(state)
+            except Exception as exc:
+                if not is_retryable(exc) or attempt >= self.max_attempts:
+                    break
+                self.sleeper(backoff_delay(attempt, self.base_delay))
+        return self.node.degrade(state, last_exc)   # ← 异常不穿透
+```
+
+### 只有会 I/O 的节点才需要护栏
+
+`merge` 和报告提取是纯函数，没有失败的理由，所以不套 `GuardedNode`。
+**加护栏也要挑地方**——无差别包裹只会让图更难读。
+
+### 三个反直觉的坑
+
+1. **降级必须推进计数器**。辩论节点降级时不推进 `debate_count`，路由器就会把控制权
+   永远交回给失败节点——死循环。所以 `DebaterNode.degrade()` 里那句
+   `"debate_count": 1` 是必须的，不是冗余。
+2. **`_node_errors` 需要合并 reducer**。三个分析师并行失败时各写各的键，
+   不能用「后写覆盖先写」，所以 state 里它是 `Annotated[Dict, merge_dict]`。
+3. **降级点选在出口节点最省事**。分析师 LLM 节点降级时，我们只注入一条「没有工具调用」的
+   兜底 AI 消息，剩下的交给既有的 `msg_clear` 节点——降级逻辑只写一处。
+
+### 故障注入验证
+
+容错能力必须能被证明，而不是嘴上说。`scripts/selfcheck.py` 里定义了
+`FlakyChatModel`（前 N 次调用抛异常），用来验证四种情况：
+
+| 场景 | 期望 |
+|---|---|
+| 可重试错误，第 1 次失败 | 重试后成功，无降级记录 |
+| 可重试错误，一直失败 | 尝试 3 次后降级，其余节点与最终结论不受影响 |
+| 不可重试错误 | 只尝试 1 次就降级 |
+| 辩论节点一直失败 | 计数器照常推进，辩论正常结束（不死循环） |

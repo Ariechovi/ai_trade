@@ -42,6 +42,8 @@ class Settings:
     data_provider: str
     max_debate_rounds: int
     max_tool_iterations: int
+    max_retry_attempts: int
+    retry_base_delay: float
     offline: bool
 
     @property
@@ -74,5 +76,7 @@ def load_settings(
         data_provider=_env("DATA_PROVIDER", "mock").lower(),
         max_debate_rounds=default_rounds if rounds is None else rounds,
         max_tool_iterations=_env_int("MAX_TOOL_ITERATIONS", 3),
+        max_retry_attempts=_env_int("MAX_RETRY_ATTEMPTS", 3),
+        retry_base_delay=_env_float("RETRY_BASE_DELAY", 0.5),
         offline=resolved_offline,
     )

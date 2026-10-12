@@ -27,10 +27,11 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 from .. import prompts
-from .base import call_llm_once, execute_tool_calls, extract_text
+from ..resilience import error_record
+from .base import call_llm_once, execute_tool_calls, extract_text, tool_call_id
 from .specs import AnalystSpec
 
 FALLBACK_REPORT = "分析未能完成：工具调用达到上限，结论仍待验证。"
@@ -71,6 +72,25 @@ class AnalystLLMNode:
             "trace": [f"llm:{self.spec.role}"],
         }
 
+    @property
+    def name(self) -> str:
+        return f"llm:{self.spec.role}"
+
+    def degrade(self, state: Dict[str, Any], exc: BaseException) -> Dict[str, Any]:
+        """LLM 调用彻底失败 → 注入一条「没有工具调用」的兜底 AI 消息。
+
+        这样路由会照常进入 msg_clear，由它把兜底文案写进报告字段——
+        降级逻辑只写一处，不必在路由那里再判一遍。
+        """
+        fallback = AIMessage(
+            content=f"[{self.spec.label}调用失败] 本段分析不可用，其余节点的结论不受影响。"
+        )
+        return {
+            self.spec.messages_field: [fallback],
+            "_node_errors": {self.spec.role: error_record("llm", self.name, exc)},
+            "trace": [f"degraded:{self.name}"],
+        }
+
 
 class AnalystToolsNode:
     """节点二：执行上一条 AIMessage 里的全部 tool_calls，并把轮数 +1。"""
@@ -88,6 +108,31 @@ class AnalystToolsNode:
             self.spec.messages_field: tool_messages,
             self.spec.tool_calls_field: 1,  # operator.add reducer → 累加 1
             "trace": [f"tools:{self.spec.role}({len(calls)})"],
+        }
+
+    @property
+    def name(self) -> str:
+        return f"tools:{self.spec.role}"
+
+    def degrade(self, state: Dict[str, Any], exc: BaseException) -> Dict[str, Any]:
+        """工具节点失败 → 为每个待执行的调用补一条失败 ToolMessage，并把轮数 +1。
+
+        ⚠️ 轮数必须推进：否则路由器会一直把控制权交回本节点，形成死循环。
+        """
+        history: List[Any] = list(state.get(self.spec.messages_field) or [])
+        last = history[-1] if history else None
+        calls = list(getattr(last, "tool_calls", None) or [])
+        if not calls:
+            calls = [{"id": "call_0"}]
+        tool_messages = [
+            ToolMessage(content=f"工具执行失败：{exc}", tool_call_id=tool_call_id(call))
+            for call in calls
+        ]
+        return {
+            self.spec.messages_field: tool_messages,
+            self.spec.tool_calls_field: 1,
+            "_node_errors": {f"{self.spec.role}.tools": error_record("tools", self.name, exc)},
+            "trace": [f"degraded:{self.name}"],
         }
 
 

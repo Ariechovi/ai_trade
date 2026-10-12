@@ -13,6 +13,9 @@
 1. workflow 控拓扑：谁先谁后、辩论几轮，都在这里写死，与 LLM 无关；
 2. agent 控内容：每个节点只做一件事，循环由回边实现，而不是节点里的 while。
 
+容错：会做 I/O 的节点都套一层 GuardedNode（重试 + 降级）。
+      纯函数节点（merge、报告提取）不套——它们没有失败的理由。
+
 位置
 ----
 上游（谁调用我）：runner.py、eval/run_eval.py、scripts/*（拿 build_graph 建图）
@@ -37,6 +40,7 @@ from .agents.manager import make_manager_node
 from .agents.researchers import make_bear_node, make_bull_node
 from .agents.specs import ANALYSTS
 from .config import Settings
+from .resilience import GuardedNode
 from .state import AgentState
 
 
@@ -62,21 +66,31 @@ def build_graph(*, llm_factory, tool_map: Dict[str, Any], settings: Settings):
     threshold = rounds * 2  # 一轮 = 多头 + 空头各发言一次
     max_tool_calls = max(1, int(settings.max_tool_iterations))
 
+    def guarded(node):
+        """给「会 I/O、可能失败」的节点套上重试 + 降级护栏。"""
+        return GuardedNode(
+            node,
+            max_attempts=settings.max_retry_attempts,
+            base_delay=settings.retry_base_delay,
+        )
+
     graph = StateGraph(AgentState)
 
     # ---------------- 1. 分析师：LLM 节点 + 工具节点 + 报告节点 ----------------
     # 遍历 agents/specs.py 里的分析师表：加一个分析师 = 改那张表，不用动这里
     for spec in ANALYSTS:
-        graph.add_node(spec.role, AnalystLLMNode(spec, llm_factory(spec.role), tool_map))
-        graph.add_node(f"tools_{spec.role}", AnalystToolsNode(spec, tool_map))
-        graph.add_node(f"msg_clear_{spec.role}", AnalystReportNode(spec))
+        graph.add_node(
+            spec.role, guarded(AnalystLLMNode(spec, llm_factory(spec.role), tool_map))
+        )
+        graph.add_node(f"tools_{spec.role}", guarded(AnalystToolsNode(spec, tool_map)))
+        graph.add_node(f"msg_clear_{spec.role}", AnalystReportNode(spec))  # 纯函数，不套
 
     # ---------------- 2. 其余节点 ----------------
     graph.add_node("merge", _merge_node)
-    graph.add_node("manager", make_manager_node(llm_factory))
+    graph.add_node("manager", guarded(make_manager_node(llm_factory)))
     if rounds > 0:
-        graph.add_node("bull", make_bull_node(llm_factory))
-        graph.add_node("bear", make_bear_node(llm_factory))
+        graph.add_node("bull", guarded(make_bull_node(llm_factory)))
+        graph.add_node("bear", guarded(make_bear_node(llm_factory)))
 
     # ---------------- 3. 分析师的边（含工具循环的回边）----------------
     for spec in ANALYSTS:
