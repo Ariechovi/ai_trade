@@ -12,6 +12,13 @@
 两个设计要点：
 1. workflow 控拓扑：谁先谁后、辩论几轮，都在这里写死，与 LLM 无关；
 2. agent 控内容：每个节点只做一件事，循环由回边实现，而不是节点里的 while。
+
+位置
+----
+上游（谁调用我）：runner.py、eval/run_eval.py、scripts/*（拿 build_graph 建图）
+下游（我调用谁）：agents/specs.py（分析师表）、agents/analysts.py 等（各节点实现）
+
+阅读建议：**从这个文件读起**。它给出整张图的形状，再顺着边去读各个节点。
 """
 
 from __future__ import annotations
@@ -21,14 +28,14 @@ from typing import Any, Callable, Dict
 from langgraph.graph import END, START, StateGraph
 
 from .agents.analysts import (
-    ANALYST_ROLES,
-    make_analyst_llm_node,
-    make_analyst_report_node,
-    make_analyst_router,
-    make_analyst_tools_node,
+    AnalystLLMNode,
+    AnalystReportNode,
+    AnalystRouter,
+    AnalystToolsNode,
 )
 from .agents.manager import make_manager_node
 from .agents.researchers import make_bear_node, make_bull_node
+from .agents.specs import ANALYSTS
 from .config import Settings
 from .state import AgentState
 
@@ -58,10 +65,11 @@ def build_graph(*, llm_factory, tool_map: Dict[str, Any], settings: Settings):
     graph = StateGraph(AgentState)
 
     # ---------------- 1. 分析师：LLM 节点 + 工具节点 + 报告节点 ----------------
-    for role in ANALYST_ROLES:
-        graph.add_node(role, make_analyst_llm_node(role, llm_factory, tool_map))
-        graph.add_node(f"tools_{role}", make_analyst_tools_node(role, tool_map))
-        graph.add_node(f"msg_clear_{role}", make_analyst_report_node(role))
+    # 遍历 agents/specs.py 里的分析师表：加一个分析师 = 改那张表，不用动这里
+    for spec in ANALYSTS:
+        graph.add_node(spec.role, AnalystLLMNode(spec, llm_factory(spec.role), tool_map))
+        graph.add_node(f"tools_{spec.role}", AnalystToolsNode(spec, tool_map))
+        graph.add_node(f"msg_clear_{spec.role}", AnalystReportNode(spec))
 
     # ---------------- 2. 其余节点 ----------------
     graph.add_node("merge", _merge_node)
@@ -71,11 +79,12 @@ def build_graph(*, llm_factory, tool_map: Dict[str, Any], settings: Settings):
         graph.add_node("bear", make_bear_node(llm_factory))
 
     # ---------------- 3. 分析师的边（含工具循环的回边）----------------
-    for role in ANALYST_ROLES:
+    for spec in ANALYSTS:
+        role = spec.role
         graph.add_edge(START, role)
         graph.add_conditional_edges(
             role,
-            make_analyst_router(role, max_tool_calls),
+            AnalystRouter(spec, max_tool_calls),
             [f"tools_{role}", f"msg_clear_{role}"],
         )
         graph.add_edge(f"tools_{role}", role)         # 回边：工具执行完，回到 LLM 继续想

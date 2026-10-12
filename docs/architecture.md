@@ -55,17 +55,25 @@ graph.add_conditional_edges("bear", make_router(threshold, after_bull=False), ["
 
 ## 五、推荐阅读顺序
 
-1. `src/state.py` —— 先搞清楚数据长什么样、怎么合并
-2. `src/graph.py` —— 再看拓扑长什么样
-3. `src/agents/base.py` —— 最后看单个 Agent 怎么思考
-4. `src/agents/*.py` —— 各角色只是"填内容"
-5. `src/offline_llm.py` —— 理解离线验证是怎么做到的
+**别从 `base.py` 开始**——那是零件。按「先形状、后细节」读：
+
+1. `src/graph.py` —— 整张图的形状（谁连谁、循环在哪）
+2. `src/agents/specs.py` —— 角色设定（一个分析师 = 一条记录）
+3. `src/agents/analysts.py` —— 节点实现（LLM / 工具 / 报告 / 路由）
+4. `src/state.py` —— 数据怎么流动（reducer）
+5. `src/agents/base.py` —— 最后的原子操作
+6. `src/offline_llm.py` —— 离线验证是怎么做到的
+
+配合运行时轨迹读会快很多：
+
+- `python -m src.runner --ticker 600519 --offline` —— 节点级轨迹
+- `python scripts/inspect_messages.py --ticker 600519` —— 消息级细节
 
 ## 六、扩展练习（难度递增）
 
 | 练习 | 做什么 | 能学到 |
 |---|---|---|
-| L1 | 新增一个「资金流向分析师」 | 加节点、加工具、改状态 |
+| L1 | 新增一个「资金流向分析师」（只需在 `agents/specs.py` 加一条记录 + 补 3 个 state 字段） | 角色注册表、加节点、加工具 |
 | L2 | 给分析师加第 2 个工具，验证 ReAct 多轮循环 | 工具调用循环 |
 | L3 | 把 `MAX_DEBATE_ROUNDS` 加到 5，观察成本与稳定性 | 消融实验设计 |
 | L4 | 新增「反思节点」：经理复盘辩论并写入长期记忆 | 记忆 / reflection |

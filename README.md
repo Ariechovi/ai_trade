@@ -83,16 +83,17 @@ python -m src.runner --ticker 600519 --provider akshare   # 用真实数据源
 ```
 mini-agents/
 ├── src/
+│   ├── graph.py          # ★ 从这里读起：整张图的形状
 │   ├── state.py          # 全局状态 + reducer（数据总线）
-│   ├── graph.py          # 图装配：节点与边（拓扑）
 │   ├── llm.py            # LLM 工厂（DeepSeek / 离线桩模型）
-│   ├── tools.py          # 工具定义 + 工具注册表
-│   ├── prompts.py        # 提示词集中管理
+│   ├── tools.py          # 工具定义
+│   ├── prompts.py        # 提示词模板（辩论 / 经理 + 模板函数）
 │   ├── offline_llm.py    # 离线桩模型（保证无 Key 也能跑）
 │   ├── runner.py         # 命令行入口
 │   └── agents/
-│       ├── base.py       # ★ ReAct 循环：Agent 的本质
-│       ├── analysts.py   # 3 个分析师
+│       ├── specs.py      # ★ 分析师注册表：一个角色一条记录，全部设定在此
+│       ├── base.py       # LLM 调用的原子操作（不做循环）
+│       ├── analysts.py   # 分析师节点实现（LLM / 工具 / 报告 / 路由）
 │       ├── researchers.py# 多头 / 空头
 │       └── manager.py    # 研究经理
 ├── data/
@@ -102,10 +103,39 @@ mini-agents/
 │   ├── cases.json        # 评测股票池
 │   └── run_eval.py       # 评测 / 消融脚本
 ├── scripts/
-│   └── selfcheck.py      # 零依赖自检（不需要 pytest）
+│   ├── selfcheck.py      # 零依赖自检（不需要 pytest）
+│   └── inspect_messages.py  # 消息级观测：逐条打印工具调用
 └── docs/
     └── architecture.md   # 架构详解与扩展练习
 ```
+
+## 读代码从哪开始
+
+**别从 `base.py` 开始读**——那是零件，读它等于在读螺丝而不是读机器。按「先形状、后细节」：
+
+```
+graph.py             ① 整张图的形状：谁连谁、循环在哪
+   ↓
+agents/specs.py      ② 角色设定：一个分析师的全部设定，就一条记录
+   ↓
+agents/analysts.py   ③ 节点实现：LLM / 工具 / 报告 / 路由，四个类
+   ↓
+state.py             ④ 数据怎么在节点间流动（reducer）
+   ↓
+agents/base.py       ⑤ 最后看原子操作：到底怎么调 LLM、怎么执行工具
+```
+
+配合**运行时轨迹**读，比静态阅读快得多：
+
+```bash
+python -m src.runner --ticker 600519 --offline      # 节点级轨迹
+python scripts/inspect_messages.py --ticker 600519  # 消息级细节
+```
+
+### 加一个分析师要改哪里？
+
+只有一处：在 [src/agents/specs.py](src/agents/specs.py) 的 `ANALYSTS` 里加一条记录。
+（外加 `state.py` 里补 3 个字段——这是 LangGraph 的静态约束，躲不掉。）
 
 ## 三个核心设计
 

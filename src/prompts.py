@@ -1,29 +1,17 @@
-"""提示词集中管理：提示词是 Agent 的一半，独立出来便于调优与 diff。"""
+"""提示词模板：与角色无关的模板函数，以及辩论 / 经理的固定提示词。
+
+分析师的系统提示词**不在这里**——它跟着角色设定走，放在 agents/specs.py，
+这样「读一个分析师」时不必跨文件跳转。
+
+位置
+----
+上游（谁调用我）：agents/analysts.py、agents/researchers.py、agents/manager.py
+下游（我调用谁）：无（纯字符串处理）
+"""
 
 from __future__ import annotations
 
 from typing import Any, Dict
-
-ANALYST_SYSTEM: Dict[str, str] = {
-    "technical": (
-        "你是一名 A 股技术面分析师。请先调用工具获取真实数据，再基于数据给出简洁结论。"
-        "严禁编造数据，只能使用工具返回的信息。"
-    ),
-    "fundamental": (
-        "你是一名 A 股基本面分析师。请先调用工具获取财务数据，再评估估值水平与盈利质量。"
-        "严禁编造数据，只能使用工具返回的信息。"
-    ),
-    "news": (
-        "你是一名 A 股消息面分析师。请先调用工具获取近期新闻，再判断消息面的方向与影响。"
-        "严禁编造数据，只能使用工具返回的信息。"
-    ),
-}
-
-ANALYST_LABELS: Dict[str, str] = {
-    "technical": "技术面分析师",
-    "fundamental": "基本面分析师",
-    "news": "消息面分析师",
-}
 
 BULL_SYSTEM = (
     "你是一名乐观的多头研究员。请基于已有的分析师报告，给出支持买入的最强论据，"
@@ -41,10 +29,11 @@ MANAGER_SYSTEM = (
 )
 
 
-def analyst_user_prompt(role: str, state: Dict[str, Any]) -> str:
+def analyst_user_prompt(label: str, state: Dict[str, Any]) -> str:
+    """分析师的第一条用户消息（label 来自 agents/specs.py）。"""
     return (
         f"请分析股票 {state.get('ticker')}（分析日期 {state.get('trade_date')}）。\n"
-        f"你的角色是：{ANALYST_LABELS.get(role, role)}。\n"
+        f"你的角色是：{label}。\n"
         "请先调用可用工具获取数据，再给出分析结论。"
     )
 

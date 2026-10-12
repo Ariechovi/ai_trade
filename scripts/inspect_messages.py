@@ -1,10 +1,9 @@
 """消息级观测：把「模型调用工具」的每一条消息完整打印出来。
 
 用法：
-    python scripts/inspect_messages.py                    # 离线桩模型 + 图级工具循环
-    python scripts/inspect_messages.py --online           # 用真实模型（DeepSeek）
-    python scripts/inspect_messages.py --full             # 内容不截断
-    python scripts/inspect_messages.py --loop-mode node   # 对照：旧实现下 state 里没有任何消息
+    python scripts/inspect_messages.py                       # 离线桩模型
+    python scripts/inspect_messages.py --online              # 用真实模型（DeepSeek）
+    python scripts/inspect_messages.py --full                # 内容不截断
     python scripts/inspect_messages.py --ticker 000001 --rounds 1
     python scripts/inspect_messages.py --online --no-steps   # 只跑一遍，省一半调用
 
@@ -14,6 +13,11 @@
 
 实现说明：为了拿到「最终 state」，脚本默认跑两遍图——第一遍观察过程，第二遍取结果。
 离线模式下没有成本；用 --online 时可以加 --no-steps 只跑一遍。
+
+位置
+----
+这是一个「阅读辅助工具」：它把图级工具循环的内部消息暴露出来，
+配合 docs/architecture.md 的阅读地图使用。
 """
 
 from __future__ import annotations
@@ -28,12 +32,12 @@ _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT))
 
 from data.provider import get_provider  # noqa: E402
+from src.agents.specs import ROLES  # noqa: E402
 from src.config import load_settings  # noqa: E402
 from src.graph import build_graph  # noqa: E402
 from src.llm import build_llm  # noqa: E402
 from src.tools import build_tools  # noqa: E402
 
-ANALYSTS = ("technical", "fundamental", "news")
 PREVIEW = 150
 
 
@@ -102,17 +106,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="逐条观测模型调用工具的消息")
     parser.add_argument("--ticker", default="600519")
     parser.add_argument("--rounds", type=int, default=2)
-    parser.add_argument("--loop-mode", default="graph", choices=["node", "graph"])
     parser.add_argument("--online", action="store_true", help="使用真实 LLM（需 .env 配 Key）")
     parser.add_argument("--full", action="store_true", help="内容不截断")
     parser.add_argument("--no-steps", action="store_true", help="跳过逐节点观察（只跑一遍）")
     args = parser.parse_args()
 
-    settings = load_settings(
-        offline=not args.online,
-        rounds=args.rounds,
-        loop_mode=args.loop_mode,
-    )
+    settings = load_settings(offline=not args.online, rounds=args.rounds)
     provider = get_provider(settings.data_provider)
     tool_map = build_tools(provider)
 
@@ -131,9 +130,8 @@ def main() -> int:
 
     print("=" * 74)
     print(
-        f"模式: {settings.tool_loop_mode}   模型: "
-        f"{'真实 LLM' if not settings.offline else '离线桩模型'}   "
-        f"ticker: {args.ticker}   数据源: {provider.name}"
+        f"模型: {'真实 LLM' if not settings.offline else '离线桩模型'}   "
+        f"ticker: {args.ticker}   数据源: {provider.name}   辩论轮数: {settings.max_debate_rounds}"
     )
     print("=" * 74)
 
@@ -161,18 +159,14 @@ def main() -> int:
     state = app.invoke(initial)
 
     print("\n② 最终 state 里的完整消息历史\n")
-    total_ok = True
-    for role in ANALYSTS:
+    for role in ROLES:
         field = f"{role}_messages"
         history = state.get(field) or []
         header = f"### {role}（{field}，共 {len(history)} 条）"
         print(header)
         print("-" * len(header))
         if not history:
-            total_ok = False
-            print("  （空 —— 当前模式下消息没有进入 state）")
-            print("  提示：--loop-mode node 时，工具循环藏在节点内部，")
-            print("        消息只活在函数局部作用域里，函数返回后就消失了。\n")
+            print("  （空）\n")
             continue
         for i, message in enumerate(history):
             for line in describe(message, i, args.full):
@@ -181,21 +175,19 @@ def main() -> int:
 
     # ---------------- ③ 汇总 ----------------
     print("③ 汇总\n")
-    for role in ANALYSTS:
+    for role in ROLES:
         history = state.get(f"{role}_messages") or []
         ai_msgs = sum(1 for m in history if role_of(m) == "ai")
         tool_msgs = sum(1 for m in history if role_of(m) == "tool")
         calls = sum(len(tool_calls_of(m)) for m in history)
+        used = state.get(f"{role}_tool_calls", 0)
         print(
             f"  {role:<12} 消息 {len(history):>2} 条 | "
             f"AI {ai_msgs} | Tool {tool_msgs} | 工具调用 {calls} 次 | "
-            f"计数字段 {role}_tool_calls={state.get(f'{role}_tool_calls', 0)}"
+            f"计数字段 {role}_tool_calls={used}"
         )
     print(f"\n  节点轨迹：{state.get('trace')}")
 
-    if not total_ok and settings.tool_loop_mode == "node":
-        print("\n  结论：node 模式下 state 里没有任何消息历史 —— 这就是「不可观测」。")
-        print("        换成 --loop-mode graph 再跑一次，对比就出来了。")
     return 0
 
 

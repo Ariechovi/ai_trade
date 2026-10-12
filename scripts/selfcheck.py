@@ -23,12 +23,12 @@ _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT))
 
 from data.provider import MockProvider  # noqa: E402
+from src.agents.specs import ROLES  # noqa: E402
 from src.config import load_settings  # noqa: E402
 from src.runner import run_case  # noqa: E402
 from src.tools import build_tools  # noqa: E402
 
 DATE = "2026-10-11"
-ROLES = ("technical", "fundamental", "news")
 
 
 class Checker:

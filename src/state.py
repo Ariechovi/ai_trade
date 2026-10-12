@@ -8,6 +8,15 @@
 
 辩论循环能一轮轮转下去，靠的就是 debate_count 这个累加器；
 辩论历史能一段段累积，靠的是 debate_history 的追加器。
+
+⚠️ 下面那 6 个以角色命名的字段，与 agents/specs.py 里每条 AnalystSpec 的
+   messages_field / tool_calls_field / report_field 一一对应——改一边要同步另一边。
+   （这份重复来自 LangGraph 对 TypedDict 的静态约束，见 specs.py 顶部说明。）
+
+位置
+----
+上游（谁调用我）：graph.py（StateGraph 的 schema）
+下游（我调用谁）：无
 """
 
 from __future__ import annotations

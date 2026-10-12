@@ -2,11 +2,19 @@
 
 用 LangChain 的 @tool 把普通函数变成 LLM 可调用的工具。
 工具与 Agent 解耦——分析师并不知道数据从哪来，只知道有这些工具可用。
+
+「哪个分析师能用哪些工具」不在这里，而在 agents/specs.py 的 tool_names。
+本文件只负责「工具本身怎么定义」。
+
+位置
+----
+上游（谁调用我）：runner.py、graph.py（构建 tool_map 并传给各节点）
+下游（我调用谁）：data/provider.py（数据源）
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 from langchain_core.tools import tool
 
@@ -31,11 +39,3 @@ def build_tools(provider) -> Dict[str, Any]:
 
     tools = [get_technicals, get_fundamentals, get_news]
     return {t.name: t for t in tools}
-
-
-# 每个分析师允许使用的工具（最小权限原则：只给该角色需要的工具）
-AGENT_TOOLS: Dict[str, List[str]] = {
-    "technical": ["get_technicals"],
-    "fundamental": ["get_fundamentals"],
-    "news": ["get_news"],
-}

@@ -11,6 +11,7 @@ from .config import load_settings
 from .graph import build_graph
 from .llm import build_llm
 from .tools import build_tools
+from .agents.specs import ROLES
 
 
 def run_case(ticker: str, trade_date: str, settings, provider) -> Dict[str, Any]:
@@ -68,7 +69,7 @@ def main() -> None:
         print(f"  - {item.get('speaker')}：{item.get('content')}")
     counts = {
         role: int(state.get(f"{role}_tool_calls", 0))
-        for role in ("technical", "fundamental", "news")
+        for role in ROLES
     }
     print(f"\n【工具轮数】{counts}")
     print("\n【最终结论】\n" + str(state.get("final_decision", "")))

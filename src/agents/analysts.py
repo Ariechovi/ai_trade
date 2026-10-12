@@ -7,117 +7,101 @@
 
 为什么每个分析师要有私有的消息字段？三个分析师在同一个超级步里并行执行，
 若共用一条消息通道，消息会交错串味。
+
+本文件不含任何角色设定——提示词、工具、字段名都在 agents/specs.py。
+这里只负责「怎么执行」，不负责「用什么执行」。
+
+与 TradingAgents-CN 的对照：
+    AnalystLLMNode    ≈ builder._create_analyst_wrapper
+    AnalystToolsNode  ≈ builder._create_tool_node_wrapper
+    AnalystReportNode ≈ builder._create_msg_clear_node
+    AnalystRouter     ≈ builder._create_analyst_condition_func
+
+位置
+----
+上游（谁调用我）：graph.py
+下游（我调用谁）：agents/specs.py（角色设定）、agents/base.py（原子操作）、prompts.py（模板）
 """
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict
+from typing import Any, Dict, List
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from .. import prompts
-from ..tools import AGENT_TOOLS
 from .base import call_llm_once, execute_tool_calls, extract_text
-
-ANALYST_ROLES = ("technical", "fundamental", "news")
-
-# 每个角色对应的三个状态字段：私有消息历史 / 工具轮数 / 报告
-ROLE_FIELDS: Dict[str, Dict[str, str]] = {
-    "technical": {
-        "messages": "technical_messages",
-        "tool_calls": "technical_tool_calls",
-        "report": "technical_report",
-    },
-    "fundamental": {
-        "messages": "fundamental_messages",
-        "tool_calls": "fundamental_tool_calls",
-        "report": "fundamental_report",
-    },
-    "news": {
-        "messages": "news_messages",
-        "tool_calls": "news_tool_calls",
-        "report": "news_report",
-    },
-}
+from .specs import AnalystSpec
 
 FALLBACK_REPORT = "分析未能完成：工具调用达到上限，结论仍待验证。"
 
 
-def _allowed_tools(role: str, tool_map: Dict[str, Any]) -> Dict[str, Any]:
+def _allowed_tools(spec: AnalystSpec, tool_map: Dict[str, Any]) -> Dict[str, Any]:
     """只给该角色需要的工具（最小权限原则）。"""
-    return {name: tool_map[name] for name in AGENT_TOOLS.get(role, []) if name in tool_map}
+    return {name: tool_map[name] for name in spec.tool_names if name in tool_map}
 
 
-# ============================================================================
-# 与 TradingAgents-CN 的对照关系：
-#   本文件 make_analyst_llm_node    ≈ V3 builder._create_analyst_wrapper
-#   本文件 make_analyst_tools_node  ≈ V3 builder._create_tool_node_wrapper
-#   本文件 make_analyst_report_node ≈ V3 builder._create_msg_clear_node
-#   本文件 make_analyst_router      ≈ V3 builder._create_analyst_condition_func
-# ============================================================================
+class AnalystLLMNode:
+    """节点一：调一次 LLM，返回它的 AIMessage（可能带 tool_calls）。
 
+    第一次进入时用「系统提示词 + 用户问题」播种私有历史，之后每次追加。
+    """
 
-def make_analyst_llm_node(
-    role: str,
-    llm_factory: Callable[[str], Any],
-    tool_map: Dict[str, Any],
-) -> Callable[[Dict[str, Any]], Dict[str, Any]]:
-    """节点一：只调一次 LLM，返回它的 AIMessage（可能带 tool_calls）。"""
-    fields = ROLE_FIELDS[role]
-    allowed = _allowed_tools(role, tool_map)
-    llm = llm_factory(role)
+    def __init__(self, spec: AnalystSpec, llm: Any, tool_map: Dict[str, Any]) -> None:
+        self.spec = spec
+        self.llm = llm
+        self.tools = _allowed_tools(spec, tool_map)
 
-    def node(state: Dict[str, Any]) -> Dict[str, Any]:
-        history = list(state.get(fields["messages"]) or [])
+    def __call__(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        history: List[Any] = list(state.get(self.spec.messages_field) or [])
         if history:
-            # 已有历史：接着往下问
-            response = call_llm_once(llm, allowed, history)
-            return {fields["messages"]: [response], "trace": [f"llm:{role}"]}
+            response = call_llm_once(self.llm, self.tools, history)
+            return {
+                self.spec.messages_field: [response],
+                "trace": [f"llm:{self.spec.role}"],
+            }
 
-        # 第一次进入：用系统提示词 + 用户问题播种私有历史
         seed = [
-            SystemMessage(content=prompts.ANALYST_SYSTEM[role]),
-            HumanMessage(content=prompts.analyst_user_prompt(role, state)),
+            SystemMessage(content=self.spec.system_prompt),
+            HumanMessage(content=prompts.analyst_user_prompt(self.spec.label, state)),
         ]
-        response = call_llm_once(llm, allowed, seed)
-        return {fields["messages"]: seed + [response], "trace": [f"llm:{role}"]}
-
-    node.__name__ = f"{role}_llm_node"
-    return node
-
-
-def make_analyst_tools_node(
-    role: str,
-    tool_map: Dict[str, Any],
-) -> Callable[[Dict[str, Any]], Dict[str, Any]]:
-    """节点二：执行上一条 AIMessage 里的全部 tool_calls，并把轮数 +1。"""
-    fields = ROLE_FIELDS[role]
-    allowed = _allowed_tools(role, tool_map)
-
-    def node(state: Dict[str, Any]) -> Dict[str, Any]:
-        history = list(state.get(fields["messages"]) or [])
-        last = history[-1] if history else None
-        calls = list(getattr(last, "tool_calls", None) or [])
-        tool_messages = execute_tool_calls(allowed, calls)
+        response = call_llm_once(self.llm, self.tools, seed)
         return {
-            fields["messages"]: tool_messages,
-            fields["tool_calls"]: 1,  # operator.add reducer → 累加 1
-            "trace": [f"tools:{role}({len(calls)})"],
+            self.spec.messages_field: seed + [response],
+            "trace": [f"llm:{self.spec.role}"],
         }
 
-    node.__name__ = f"{role}_tools_node"
-    return node
+
+class AnalystToolsNode:
+    """节点二：执行上一条 AIMessage 里的全部 tool_calls，并把轮数 +1。"""
+
+    def __init__(self, spec: AnalystSpec, tool_map: Dict[str, Any]) -> None:
+        self.spec = spec
+        self.tools = _allowed_tools(spec, tool_map)
+
+    def __call__(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        history: List[Any] = list(state.get(self.spec.messages_field) or [])
+        last = history[-1] if history else None
+        calls = list(getattr(last, "tool_calls", None) or [])
+        tool_messages = execute_tool_calls(self.tools, calls)
+        return {
+            self.spec.messages_field: tool_messages,
+            self.spec.tool_calls_field: 1,  # operator.add reducer → 累加 1
+            "trace": [f"tools:{self.spec.role}({len(calls)})"],
+        }
 
 
-def make_analyst_report_node(role: str) -> Callable[[Dict[str, Any]], Dict[str, Any]]:
+class AnalystReportNode:
     """节点三：从私有历史里取出最终文本，写入报告字段（对应 V3 的 msg_clear 节点）。
 
     它承担「清场」职责：报告一旦落到独立字段，下游节点就不再需要读私有消息历史。
     """
-    fields = ROLE_FIELDS[role]
 
-    def node(state: Dict[str, Any]) -> Dict[str, Any]:
-        history = list(state.get(fields["messages"]) or [])
+    def __init__(self, spec: AnalystSpec) -> None:
+        self.spec = spec
+
+    def __call__(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        history: List[Any] = list(state.get(self.spec.messages_field) or [])
         text = ""
         for message in reversed(history):
             if isinstance(message, AIMessage) and not (
@@ -125,30 +109,27 @@ def make_analyst_report_node(role: str) -> Callable[[Dict[str, Any]], Dict[str, 
             ):
                 text = extract_text(message)
                 break
-        if not text:
-            text = FALLBACK_REPORT
-        return {fields["report"]: text, "trace": [f"report:{role}"]}
-
-    node.__name__ = f"{role}_report_node"
-    return node
+        return {
+            self.spec.report_field: text or FALLBACK_REPORT,
+            "trace": [f"report:{self.spec.role}"],
+        }
 
 
-def make_analyst_router(role: str, max_tool_calls: int) -> Callable[[Dict[str, Any]], str]:
+class AnalystRouter:
     """条件边：决定「继续调工具」还是「收口出报告」。
 
     终止条件有两个：模型不再要求调工具，或者工具轮数达到上限（防死循环）。
     """
-    fields = ROLE_FIELDS[role]
-    tools_node = f"tools_{role}"
-    report_node = f"msg_clear_{role}"
 
-    def route(state: Dict[str, Any]) -> str:
-        history = list(state.get(fields["messages"]) or [])
+    def __init__(self, spec: AnalystSpec, max_tool_calls: int) -> None:
+        self.spec = spec
+        self.max_tool_calls = max_tool_calls
+
+    def __call__(self, state: Dict[str, Any]) -> str:
+        history: List[Any] = list(state.get(self.spec.messages_field) or [])
         last = history[-1] if history else None
         calls = list(getattr(last, "tool_calls", None) or [])
-        used = int(state.get(fields["tool_calls"], 0))
-        if calls and used < max_tool_calls:
-            return tools_node
-        return report_node
-
-    return route
+        used = int(state.get(self.spec.tool_calls_field, 0))
+        if calls and used < self.max_tool_calls:
+            return f"tools_{self.spec.role}"
+        return f"msg_clear_{self.spec.role}"
