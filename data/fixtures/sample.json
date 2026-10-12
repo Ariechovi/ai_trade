@@ -1,0 +1,32 @@
+{
+  "600519": {
+    "name": "贵州茅台",
+    "price": 1520.5,
+    "pe": 22.4,
+    "pb": 7.8,
+    "roe": 31.2,
+    "revenue_yoy": 15.6,
+    "profit_yoy": 16.8,
+    "debt_ratio": 18.5
+  },
+  "000001": {
+    "name": "平安银行",
+    "price": 11.35,
+    "pe": 5.2,
+    "pb": 0.55,
+    "roe": 11.4,
+    "revenue_yoy": -3.2,
+    "profit_yoy": 2.1,
+    "debt_ratio": 91.8
+  },
+  "300750": {
+    "name": "宁德时代",
+    "price": 186.4,
+    "pe": 18.9,
+    "pb": 3.6,
+    "roe": 22.7,
+    "revenue_yoy": 8.4,
+    "profit_yoy": 12.3,
+    "debt_ratio": 62.4
+  }
+}

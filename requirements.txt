@@ -1,0 +1,9 @@
+# 核心依赖（离线模式下只需前四个即可跑通全流程）
+langgraph>=1.0
+langchain-core>=1.0
+langchain-openai>=1.0
+python-dotenv>=1.0
+
+# 真实 A 股数据源（可选；不装则自动使用 mock 数据）
+akshare>=1.17
+pandas>=2.0
