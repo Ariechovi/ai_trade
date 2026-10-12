@@ -71,3 +71,41 @@ graph.add_conditional_edges("bear", make_router(threshold, after_bull=False), ["
 | L4 | 新增「反思节点」：经理复盘辩论并写入长期记忆 | 记忆 / reflection |
 | L5 | 把 `--provider` 换成 akshare，处理真实数据的缺失与异常 | 工程鲁棒性 |
 | L6 | 加一个 LLM-as-judge 评估结论质量 | 系统评测 |
+
+## 七、图级工具循环（本项目最核心的一处设计）
+
+### 问题
+
+如果工具循环藏在 Agent 节点内部的 `while` 里，整个过程对图就是**不可见**的：
+你不知道调了几次工具、调了什么、失败在哪一步，也无法中途打断或加入人工审批。
+
+### 解法：把它拆成图上的一串节点
+
+```
+analyst_<role>  ──┬─(有 tool_calls 且未超上限)─> tools_<role> ─┐
+                  │                                          │
+                  └─(无 tool_calls / 超上限)──> msg_clear_<role> ─> merge
+                                     ▲                        │
+                                     └────────────────────────┘
+```
+
+把「调 LLM」和「执行工具」拆成两个原子操作（`src/agents/base.py`）：
+- `call_llm_once(llm, tool_map, messages)` —— 只调一次 LLM，不做循环
+- `execute_tool_calls(tool_map, tool_calls)` —— 执行工具，返回 ToolMessage
+
+### 必须解决的 5 个问题
+
+| # | 问题 | 解法 | V3 里的对应物 |
+|---|---|---|---|
+| 1 | 三个分析师并行，共享 `messages` 会串味 | 每人一个私有消息字段 | `_market_messages` 等 |
+| 2 | `tool_call_id` 必须与 `ToolMessage` 严格配对 | `execute_tool_calls` 里透传 id | `ToolNode` 内部完成 |
+| 3 | 循环可能永不终止 | `Annotated[int, operator.add]` 计数器 + 条件边阈值 | `max_tool_calls = 3` |
+| 4 | 报告要落到独立字段，不能污染下游 | 独立的 `msg_clear` 节点 | `_create_msg_clear_node` |
+| 5 | 私有历史如何初始化 | 首次进入时用 System + Human 播种 | `_create_analyst_wrapper` 的初始化分支 |
+
+### 这么做之后白拿到的能力
+
+- 每一步工具调用都在 trace / 状态里，可观测
+- 可对单个工具节点做超时、重试、降级
+- 可对危险工具（下单、写库）插入人工审批
+- 可配合 LangGraph 的持久化做断点续跑与回放

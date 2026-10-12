@@ -127,16 +127,62 @@ mini-agents/
 
 `max_iterations` 是防死循环的保险丝。读懂了这 30 行，就读懂了所有 Agent 框架的内核。
 
+## 工具循环：每一步都在图上（本项目最值得看的一处）
+
+「LLM ↔ 工具 反复来回」这个循环**不在节点内部，而是由图上的节点和回边实现**：
+
+```
+<role> ──┬─(有 tool_calls 且未超上限)─> tools_<role> ─┐
+         │                                           │
+         └─(无 tool_calls / 超上限)──> msg_clear_<role> ─> merge
+                          ▲                          │
+                          └──── 回边（循环在这里）─────┘
+```
+
+跑一次就能看到每一步：
+
+```bash
+python -m src.runner --ticker 600519 --offline
+```
+
+```
+llm:fundamental, llm:news, llm:technical,
+tools:fundamental(1), tools:news(1), tools:technical(1),
+llm:fundamental, llm:news, llm:technical,
+report:fundamental, report:news, report:technical,
+merge, debate:bull, debate:bear, debate:bull, debate:bear, manager
+```
+
+注意 `llm:technical` 出现了两次——第一次是模型要求调工具，第二次是拿到工具结果后出结论。
+**循环就是那条 `tools_<role> → <role>` 的回边**，全程没有 `while`。
+
+**为什么一定要这么做？** 只有图上的节点才能被观测、中断、审批、单独重试和回放；
+藏在节点内部的 `while` 里，这些统统做不到。
+
+### 与 V3 的代码对照
+
+| 本项目 | 对应 TradingAgents-CN 的哪段实现 |
+|---|---|
+| `make_analyst_llm_node` | `core/workflow/builder.py` → `_create_analyst_wrapper` |
+| `make_analyst_tools_node` | `core/workflow/builder.py` → `_create_tool_node_wrapper` |
+| `make_analyst_report_node` | `core/workflow/builder.py` → `_create_msg_clear_node` |
+| `make_analyst_router` | `core/workflow/builder.py` → `_create_analyst_condition_func` |
+| `technical_messages` / `technical_tool_calls` | `_market_messages` / `market_tool_call_count` |
+
+读 V3 时你会遇到那 4 个「怪东西」——为什么要给每个分析师独立的 `_xxx_messages`、
+为什么要 `msg_clear` 节点、为什么工具节点还要包一层 wrapper——答案都在本项目的
+`src/agents/analysts.py` 里。
+
 ## 验证
 
-### 自检：21/21 通过
+### 自检：33/33 通过
 
 ```bash
 python scripts/selfcheck.py
 ```
 
 覆盖：配置降级、数据可复现、工具返回、端到端跑通、辩论计数严格等于「轮数 × 2」、
-并行扇入、不同标的数据不串味。
+并行扇入、不同标的数据不串味、工具循环每一步可见且顺序正确、工具轮数正确落库。
 
 ### 辩论轮数消融
 

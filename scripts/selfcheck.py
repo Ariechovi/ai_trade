@@ -9,8 +9,9 @@
 3. 工具层能正常返回
 4. 图能端到端跑通，三份分析师报告齐全
 5. 辩论轮数与计数器严格一致（rounds = 0/1/2/3）
-6. 并行扇入：三个分析师都执行了
-7. 不同股票产出不同结果（证明数据真的流过了）
+6. 工具循环的每一步都出现在图里（llm / tools / report 三类节点）
+7. 工具轮数被正确计数，并落到状态里
+8. 不同股票产出不同结果（证明数据真的流过了）
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ from src.runner import run_case  # noqa: E402
 from src.tools import build_tools  # noqa: E402
 
 DATE = "2026-10-11"
+ROLES = ("technical", "fundamental", "news")
 
 
 class Checker:
@@ -73,14 +75,22 @@ def main() -> int:
 
     print("[3] 图：端到端（rounds=2）")
     state = run_case("600519", DATE, settings, provider)
+    trace = [str(t) for t in (state.get("trace") or [])]
     c.check("技术面报告非空", bool(state.get("technical_report")))
     c.check("基本面报告非空", bool(state.get("fundamental_report")))
     c.check("消息面报告非空", bool(state.get("news_report")))
     c.check("最终结论非空", bool(state.get("final_decision")))
     c.check("辩论计数 = 4", int(state.get("debate_count", 0)) == 4, f"got={state.get('debate_count')}")
     c.check("辩论历史长度 = 4", len(state.get("debate_history") or []) == 4)
-    trace = state.get("trace") or []
-    c.check("三个分析师都执行", sum(1 for t in trace if str(t).startswith("analyst:")) == 3)
+    c.check(
+        "三个分析师都执行了 LLM 节点",
+        # 每个分析师的 LLM 节点会执行两次（先要工具，再出结论），所以按角色去重
+        len({t for t in trace if t.startswith("llm:")}) == 3,
+    )
+    c.check(
+        "三个分析师都产出了报告",
+        sum(1 for t in trace if t.startswith("report:")) == 3,
+    )
     c.check("经过 merge 汇合点", "merge" in trace)
     c.check("经过 manager 节点", "manager" in trace)
 
@@ -100,6 +110,30 @@ def main() -> int:
     s1 = run_case("600519", DATE, settings, provider)
     s2 = run_case("300750", DATE, settings, provider)
     c.check("两只股票技术面报告不同", s1.get("technical_report") != s2.get("technical_report"))
+
+    print("[6] 工具循环的每一步都出现在图里")
+    c.check("trace 含 llm:technical", "llm:technical" in trace)
+    c.check(
+        "trace 含 tools:technical(n)",
+        any(t.startswith("tools:technical(") for t in trace),
+    )
+    c.check("trace 含 report:technical", "report:technical" in trace)
+    c.check(
+        "三个分析师各执行了工具节点",
+        all(any(t.startswith(f"tools:{role}(") for t in trace) for role in ROLES),
+    )
+    c.check(
+        "工具节点排在对应 LLM 节点之后",
+        trace.index("llm:technical") < next(
+            i for i, t in enumerate(trace) if t.startswith("tools:technical(")
+        ),
+    )
+
+    print("[7] 工具轮数落到状态里")
+    for role in ROLES:
+        used = int(state.get(f"{role}_tool_calls", 0))
+        c.check(f"{role} 工具轮数 = 1", used == 1, f"got={used}")
+        c.check(f"{role} 私有消息历史非空", bool(state.get(f"{role}_messages")))
 
     return 0 if c.summary() else 1
 

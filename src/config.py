@@ -49,7 +49,11 @@ class Settings:
         return bool(self.llm_api_key)
 
 
-def load_settings(*, offline: Optional[bool] = None, rounds: Optional[int] = None) -> Settings:
+def load_settings(
+    *,
+    offline: Optional[bool] = None,
+    rounds: Optional[int] = None,
+) -> Settings:
     """读取配置。
 
     offline: 显式指定是否离线；None 表示按 .env / 是否有 Key 自动判断。

@@ -1,10 +1,15 @@
-"""Agent 基座：一个「LLM ↔ 工具」的循环（ReAct 的最小实现）。
+"""Agent 基座：LLM 调用与工具执行的最小原子操作。
 
-整个项目里「Agent」的本质就是下面这 30 行：
-    调 LLM → 如果它要求调用工具 → 执行工具、把结果喂回去 → 再调 LLM → ……
-           → 如果它不再调用工具 → 返回最终文本
+设计原则：**Agent 内部不做循环。**
 
-max_iterations 是防死循环的保险丝。
+    循环是图的责任——「调 LLM」和「执行工具」各自是图上的一个节点，
+    由条件边把它们串起来（见 src/graph.py）。这样每一次工具调用都能
+    被观测、中断、单独重试，也才有可能插入人工审批。
+
+三个原子操作：
+    complete()           —— 无工具场景：一次调用直接拿文本（研究员 / 经理用）
+    call_llm_once()      —— 调一次 LLM，返回 AIMessage（可能带 tool_calls）
+    execute_tool_calls() —— 执行 tool_calls，返回 ToolMessage 列表
 """
 
 from __future__ import annotations
@@ -35,41 +40,44 @@ def extract_text(message: Any) -> str:
     return str(content).strip()
 
 
-def run_agent(
-    llm: Any,
-    tool_map: Dict[str, Any],
-    system_prompt: str,
-    user_prompt: str,
-    max_iterations: int = 3,
-) -> str:
-    """执行一次完整的 Agent 推理，返回最终文本。"""
+def complete(llm: Any, system_prompt: str, user_prompt: str) -> str:
+    """无工具场景下的一次性调用：直接返回文本。
+
+    研究员与经理不需要工具，所以它们只需要这一步，不需要任何循环。
+    """
+    response = llm.invoke(
+        [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=user_prompt),
+        ]
+    )
+    return extract_text(response)
+
+
+def call_llm_once(llm: Any, tool_map: Dict[str, Any], messages: List[Any]) -> Any:
+    """只调用一次 LLM（绑定工具），返回 AIMessage。不做任何循环。"""
     tools = list(tool_map.values())
     model = llm.bind_tools(tools) if tools else llm
-    messages: List[Any] = [
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=user_prompt),
-    ]
+    return model.invoke(messages)
 
-    for _ in range(max(1, int(max_iterations))):
-        response = model.invoke(messages)
-        messages.append(response)
-        tool_calls = getattr(response, "tool_calls", None) or []
-        if not tool_calls:
-            return extract_text(response)
 
-        for call in tool_calls:
-            name = _field(call, "name", "")
-            args = _field(call, "args", {}) or {}
-            call_id = _field(call, "id", "call_0") or "call_0"
-            if name not in tool_map:
-                messages.append(ToolMessage(content=f"未知工具：{name}", tool_call_id=call_id))
-                continue
-            try:
-                result = tool_map[name].invoke(args)
-            except Exception as exc:  # 单个工具失败不应中断整个流程
-                result = f"工具执行失败：{exc}"
-            messages.append(ToolMessage(content=str(result), tool_call_id=call_id))
+def execute_tool_calls(tool_map: Dict[str, Any], tool_calls: List[Any]) -> List[ToolMessage]:
+    """执行 AIMessage 里的全部 tool_calls，返回对应的 ToolMessage 列表。
 
-    # 兜底：不再绑定工具，强制模型收口，避免无限循环
-    messages.append(HumanMessage(content="请基于以上信息直接给出最终结论，不要再调用工具。"))
-    return extract_text(llm.invoke(messages))
+    tool_call_id 必须与请求严格配对，否则下一次调用 LLM 会直接报错。
+    （LangGraph 预置的 ToolNode 做的就是这件事，这里手写一遍是为了看清机制。）
+    """
+    results: List[ToolMessage] = []
+    for call in tool_calls or []:
+        name = _field(call, "name", "")
+        args = _field(call, "args", {}) or {}
+        call_id = _field(call, "id", "call_0") or "call_0"
+        if name not in tool_map:
+            results.append(ToolMessage(content=f"未知工具：{name}", tool_call_id=call_id))
+            continue
+        try:
+            output = tool_map[name].invoke(args)
+        except Exception as exc:  # 单个工具失败不应中断整个流程
+            output = f"工具执行失败：{exc}"
+        results.append(ToolMessage(content=str(output), tool_call_id=call_id))
+    return results

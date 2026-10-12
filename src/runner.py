@@ -66,6 +66,11 @@ def main() -> None:
     print(f"\n【辩论】共 {int(state.get('debate_count', 0))} 次发言")
     for item in state.get("debate_history") or []:
         print(f"  - {item.get('speaker')}：{item.get('content')}")
+    counts = {
+        role: int(state.get(f"{role}_tool_calls", 0))
+        for role in ("technical", "fundamental", "news")
+    }
+    print(f"\n【工具轮数】{counts}")
     print("\n【最终结论】\n" + str(state.get("final_decision", "")))
 
 
