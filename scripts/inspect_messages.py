@@ -31,7 +31,7 @@ from typing import Any, Dict, List
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT))
 
-from data.provider import get_provider  # noqa: E402
+from data import get_data_service  # noqa: E402
 from src.agents.specs import ROLES  # noqa: E402
 from src.config import load_settings  # noqa: E402
 from src.graph import build_graph  # noqa: E402
@@ -112,7 +112,7 @@ def main() -> int:
     args = parser.parse_args()
 
     settings = load_settings(offline=not args.online, rounds=args.rounds)
-    provider = get_provider(settings.data_provider)
+    provider = get_data_service(settings.data_provider)
     tool_map = build_tools(provider)
 
     def llm_factory(role: str):

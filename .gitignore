@@ -4,5 +4,6 @@ __pycache__/
 .venv/
 env/
 eval/results*.json
+data/.cache/
 .idea/
 .vscode/

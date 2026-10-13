@@ -46,17 +46,31 @@ class AnalystLLMNode:
     """节点一：调一次 LLM，返回它的 AIMessage（可能带 tool_calls）。
 
     第一次进入时用「系统提示词 + 用户问题」播种私有历史，之后每次追加。
+
+    一个关键细节：**工具预算用完后，这次调用不再绑定工具**。
+    否则循环会停在一条「带未执行 tool_calls」的 AI 消息上，
+    报告提取节点找不到纯文本结论，只能写兜底文案。
+    （这正是最早的 run_agent 里那句「强制收口」的作用。）
     """
 
-    def __init__(self, spec: AnalystSpec, llm: Any, tool_map: Dict[str, Any]) -> None:
+    def __init__(
+        self,
+        spec: AnalystSpec,
+        llm: Any,
+        tool_map: Dict[str, Any],
+        max_tool_calls: int,
+    ) -> None:
         self.spec = spec
         self.llm = llm
         self.tools = _allowed_tools(spec, tool_map)
+        self.max_tool_calls = max(1, int(max_tool_calls))
 
     def __call__(self, state: Dict[str, Any]) -> Dict[str, Any]:
         history: List[Any] = list(state.get(self.spec.messages_field) or [])
+        used = int(state.get(self.spec.tool_calls_field, 0))
+        tools = {} if used >= self.max_tool_calls else self.tools
         if history:
-            response = call_llm_once(self.llm, self.tools, history)
+            response = call_llm_once(self.llm, tools, history)
             return {
                 self.spec.messages_field: [response],
                 "trace": [f"llm:{self.spec.role}"],
@@ -66,7 +80,7 @@ class AnalystLLMNode:
             SystemMessage(content=self.spec.system_prompt),
             HumanMessage(content=prompts.analyst_user_prompt(self.spec.label, state)),
         ]
-        response = call_llm_once(self.llm, self.tools, seed)
+        response = call_llm_once(self.llm, tools, seed)
         return {
             self.spec.messages_field: seed + [response],
             "trace": [f"llm:{self.spec.role}"],

@@ -22,7 +22,7 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT))
 
-from data.provider import get_provider  # noqa: E402
+from data import get_data_service  # noqa: E402
 from src.config import load_settings  # noqa: E402
 from src.runner import run_case  # noqa: E402
 
@@ -61,7 +61,7 @@ def main() -> int:
     stability = {}
     for rounds in rounds_list:
         settings = load_settings(offline=not args.online, rounds=rounds)
-        provider = get_provider(settings.data_provider)
+        provider = get_data_service(settings.data_provider)
         identical = 0
         for ticker in tickers:
             decisions = set()

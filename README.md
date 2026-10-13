@@ -65,7 +65,7 @@ python -m src.runner --ticker 600519
 DEEPSEEK_API_KEY=sk-xxxxxxxx
 LLM_MODEL=deepseek-chat
 LLM_BASE_URL=https://api.deepseek.com/v1
-DATA_PROVIDER=mock          # 换成 akshare 可拉真实 A 股数据
+DATA_PROVIDER=auto          # auto = akshare 真实数据；mock = 离线模拟数据
 MAX_DEBATE_ROUNDS=2
 ```
 
@@ -86,7 +86,7 @@ mini-agents/
 │   ├── graph.py          # ★ 从这里读起：整张图的形状
 │   ├── state.py          # 全局状态 + reducer（数据总线）
 │   ├── llm.py            # LLM 工厂（DeepSeek / 离线桩模型）
-│   ├── tools.py          # 工具定义
+│   ├── tools/            # 工具层：technical / fundamental / news 三个域
 │   ├── prompts.py        # 提示词模板（辩论 / 经理 + 模板函数）
 │   ├── offline_llm.py    # 离线桩模型（保证无 Key 也能跑）
 │   ├── resilience.py     # 韧性层：重试 + 降级护栏
@@ -98,7 +98,10 @@ mini-agents/
 │       ├── researchers.py# 多头 / 空头
 │       └── manager.py    # 研究经理
 ├── data/
-│   ├── provider.py       # 数据源抽象（mock / akshare）
+│   ├── sources/          # 数据源适配：base / akshare_source / mock_source
+│   ├── indicators.py     # 技术指标计算（纯 pandas，公式可读）
+│   ├── cache.py          # 文件缓存
+│   ├── service.py        # 数据服务：多源优先级 + 降级 + 缓存
 │   └── fixtures/         # 离线样本数据
 ├── eval/
 │   ├── cases.json        # 评测股票池
@@ -253,9 +256,59 @@ _node_errors -> {"technical": {"stage": "llm", "type": "RuntimeError", "message"
 `degrade()` ≈ `builder.py:2083` 的 degraded 分支 + `_node_errors`；
 `quality_gate.py` 则是更进一步——连「报告质量不合格」也算一种失败。
 
+## 数据层：四层分离
+
+这一层照搬 TradingAgents-CN 的 `tradingagents/dataflows/` 骨架：
+
+| 本项目的文件 | 职责 | V3 的对应物 |
+|---|---|---|
+| `data/sources/` | 一个来源一个文件，统一实现 `BaseDataSource` | `dataflows/providers/` |
+| `data/indicators.py` | 指标计算（纯函数，给价格序列就算） | `dataflows/technical/` |
+| `data/cache.py` | 文件缓存 + TTL | `dataflows/cache/file_cache.py` |
+| `data/service.py` | 用哪个源、失败了怎么办、要不要缓存 | `dataflows/data_source_manager.py` |
+| `src/tools/` | 暴露什么给 LLM（按分析师域分文件） | `core/tools/implementations/` |
+
+**指标是真算的，不是编的**（pandas 手写公式，每一行都看得出来源）：
+
+```
+[技术面· 离线模拟数据] 600519 最近 60 个交易日
+- 最新收盘 1718.28，当日涨跌 -1.37%
+- 均线：MA5=1721.92，MA10=1711.5，MA20=1719.75，MA60=1594.31
+- 均线形态：多头排列（MA5>MA20）
+- RSI(14)=53.4（中性区）
+- MACD：DIF=22.921，DEA=30.077，DIF 在 DEA 下方（空头）
+- 布林带：上轨 1778.1 / 下轨 1661.41，当前位于带内 48.7% 位置
+- 波动率：ATR(14) 占价格 2.3%
+- 量能：最新成交量为 20 日均量的 0.96 倍
+```
+
+**两条刻意的规则**：
+
+1. **模拟数据必须显眼标注**——用 mock 时输出带 `· 离线模拟数据`，绝不让人把假数据当成真结论。
+2. **真实数据失败时不偷偷用模拟数据顶替**——`with_mock_fallback` 默认关闭，宁可报错。
+
+**接口互备**（真实环境实测得出）：akshare 的东财行情域名在部分网络下不可达，
+所以行情走「新浪优先 → 东财兜底」；财务与新闻走东财。公司名拿不到时**只降级公司名**，
+财务指标照常输出——这叫「部分降级」，比整体失败好。
+
+真实数据实测（`--provider akshare`，2026-10-12 跑通）：
+
+```
+[技术面] 600519 最近 60 个交易日
+- 最新收盘 1288.0，当日涨跌 1.98%
+- 均线：MA5=1260.2，MA10=1253.95，MA20=1267.44，MA60=1292.46
+- RSI(14)=56.2（中性区）
+- MACD：DIF=-8.8，DEA=-11.713，DIF 在 DEA 上方（多头）
+
+[基本面] 报告期 20260630，ROE=16.75%，营业总收入=922.78 亿，归母净利润=445.17 亿，
+         资产负债率=15.19%，毛利率=89.56%，净利率=50.75%
+```
+
+切换数据源只需改一个环境变量：`DATA_PROVIDER=auto`（akshare 真实数据）或 `mock`（离线模拟）。
+
 ## 验证
 
-### 自检：49/49 通过
+### 自检：79/79 通过
 
 ```bash
 python scripts/selfcheck.py
@@ -263,7 +316,50 @@ python scripts/selfcheck.py
 
 覆盖：配置降级、数据可复现、工具返回、端到端跑通、辩论计数严格等于「轮数 × 2」、
 并行扇入、不同标的数据不串味、工具循环每一步可见且顺序正确、工具轮数正确落库，
-以及**故障注入**下的重试 / 降级 / 不阻断 / 不死循环。
+**故障注入**下的重试 / 降级 / 不阻断 / 不死循环，以及数据层的
+**指标公式正确性**（用已知序列反推 RSI、MA）、缓存命中与过期、多源降级、模拟数据标注，
+还有工具层的归属校验与**多轮工具循环**。
+
+## 工具层：每个分析师 4~5 个真工具
+
+对应 TradingAgents-CN 的 `core/tools/implementations/`（V3 给每个分析师配 3~8 个工具，
+技术域还细分为 indicators / candlestick_patterns / crossover_signals /
+support_resistance / volume_analysis 等）。本项目按同样的思路配：
+
+| 分析师 | 工具 |
+|---|---|
+| 技术面（5） | 价格概览、按需算指标、交叉信号检测、支撑压力位、量能分析 |
+| 基本面（5） | 财务报表、成长性（同比）、财务健康度评分、估值估算、同业对比 |
+| 消息面（4） | 新闻列表、关键词检索、情绪打分（词典规则）、市场环境 |
+
+**每个工具都是一次真实计算，不是换个名字再包一层。** 例如：
+
+- `detect_crossover_signals` 真的去扫 MA5/MA20、MA10/MA60、MACD 的交叉点，并报出距今几个交易日
+- `estimate_valuation` 用「报告期 EPS × 年化系数」估 PE，并**把假设写在输出里**
+- `score_news_sentiment` 用金融正负面词典做规则打分（便宜、可解释、可测试）
+
+**工具变多之后，图上的工具循环才真正跑起来**：一次分析里
+`llm → tools → llm → tools → llm → tools → llm → report`，
+每个分析师往返 3 轮（受 `MAX_TOOL_ITERATIONS` 限制）。
+
+这也是「为什么需要多个分析师」这个问题的答案：**他们的工具集不同**。
+
+### 一个只有真实 LLM 才会暴露的 bug
+
+真实跑一次就发现轨迹不对：`merge` 执行了 **2 次**、`manager` 执行了 **2 次**，
+而且 `debate:bull` 出现在 `report:fundamental` 之前——**辩论是在缺料的情况下进行的**。
+
+根因：LangGraph 的 `add_node` 默认 `defer=False`，含义是「**任一**入边到达就执行」。
+三个分析师的循环长度往往不同（真实模型一次可能返回多个 `tool_calls`），
+于是三条入边分别落在三个超级步 → `merge` 被触发三次。
+
+```python
+graph.add_node("merge", _merge_node, defer=True)   # 等齐所有入边再执行
+```
+
+**为什么离线自检没发现它**：离线桩让三个分析师的循环长度完全相同，
+三条入边落在同一个超级步，`merge` 恰好只触发一次。
+**"等长测试"掩盖了"不等长现实"**——现在自检里专门加了不等长分支的回归用例。
 
 ### 辩论轮数消融
 

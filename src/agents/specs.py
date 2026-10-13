@@ -46,9 +46,16 @@ ANALYSTS: Tuple[AnalystSpec, ...] = (
         label="技术面分析师",
         system_prompt=(
             "你是一名 A 股技术面分析师。请先调用工具获取真实数据，再基于数据给出简洁结论。"
-            "严禁编造数据，只能使用工具返回的信息。"
+            "你有多个工具可用（价格概览、指标计算、交叉信号、支撑压力、量能），"
+            "请至少调用 2 个不同工具再下结论。严禁编造数据，只能使用工具返回的信息。"
         ),
-        tool_names=("get_technicals",),
+        tool_names=(
+            "get_price_overview",
+            "compute_indicators",
+            "detect_crossover_signals",
+            "find_support_resistance",
+            "analyze_volume",
+        ),
         report_field="technical_report",
         messages_field="technical_messages",
         tool_calls_field="technical_tool_calls",
@@ -58,9 +65,16 @@ ANALYSTS: Tuple[AnalystSpec, ...] = (
         label="基本面分析师",
         system_prompt=(
             "你是一名 A 股基本面分析师。请先调用工具获取财务数据，再评估估值水平与盈利质量。"
-            "严禁编造数据，只能使用工具返回的信息。"
+            "你有多个工具可用（财务报表、成长性、健康度、估值估算、同业对比），"
+            "请至少调用 2 个不同工具再下结论。严禁编造数据，只能使用工具返回的信息。"
         ),
-        tool_names=("get_fundamentals",),
+        tool_names=(
+            "get_financial_statements",
+            "analyze_growth",
+            "assess_financial_health",
+            "estimate_valuation",
+            "compare_peers",
+        ),
         report_field="fundamental_report",
         messages_field="fundamental_messages",
         tool_calls_field="fundamental_tool_calls",
@@ -70,9 +84,15 @@ ANALYSTS: Tuple[AnalystSpec, ...] = (
         label="消息面分析师",
         system_prompt=(
             "你是一名 A 股消息面分析师。请先调用工具获取近期新闻，再判断消息面的方向与影响。"
-            "严禁编造数据，只能使用工具返回的信息。"
+            "你有多个工具可用（新闻列表、关键词检索、情绪打分、市场环境），"
+            "请至少调用 2 个不同工具再下结论。严禁编造数据，只能使用工具返回的信息。"
         ),
-        tool_names=("get_news",),
+        tool_names=(
+            "get_recent_news",
+            "filter_news",
+            "score_news_sentiment",
+            "get_market_environment",
+        ),
         report_field="news_report",
         messages_field="news_messages",
         tool_calls_field="news_tool_calls",

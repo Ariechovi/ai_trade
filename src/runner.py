@@ -34,7 +34,7 @@ def run_case(ticker: str, trade_date: str, settings, provider) -> Dict[str, Any]
 
 
 def main() -> None:
-    from data.provider import get_provider
+    from data import get_data_service
 
     parser = argparse.ArgumentParser(description="mini-agents：多智能体投研系统（最小实现）")
     parser.add_argument("--ticker", default="600519", help="股票代码，例如 600519")
@@ -46,11 +46,12 @@ def main() -> None:
     args = parser.parse_args()
 
     settings = load_settings(offline=True if args.offline else None, rounds=args.rounds)
-    provider = get_provider(args.provider or settings.data_provider)
+    provider = get_data_service(args.provider or settings.data_provider)
+    sources = "+".join(source.name for source in provider.sources)
 
     print(
         f"[mini-agents] ticker={args.ticker} rounds={settings.max_debate_rounds} "
-        f"offline={settings.offline} provider={provider.name}"
+        f"offline={settings.offline} sources={sources}"
     )
     state = run_case(args.ticker, args.date, settings, provider)
 

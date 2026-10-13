@@ -1,8 +1,12 @@
 """离线桩模型：不联网、不花钱，也能把整张图完整跑一遍。
 
 它是一个确定性的假 LLM：
-- 绑定了工具、且还没拿到工具结果 → 返回一个 tool_call，要求调用第一个工具；
-- 已经拿到工具结果，或本身没绑定工具 → 返回一段最终文本。
+- 绑定了工具、且还有没用过的工具 → 返回一个 tool_call，**按顺序**调用下一个工具；
+- 工具都调过了，或本身没绑定工具 → 返回一段最终文本。
+
+「按顺序调多个工具」是刻意设计的：只有这样，图上的工具循环才会真正多轮往返
+（条件边 → 工具节点 → 回边 → 条件边 …），而不是一次就结束。
+真实 LLM 当然不会这么机械，但它演示的路径是一样的。
 
 两个用途：
 1. 任何人 clone 下来就能看到完整流程，不需要 API Key；
@@ -11,7 +15,7 @@
 
 from __future__ import annotations
 
-from typing import Any, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 from langchain_core.callbacks import CallbackManagerForLLMRun
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -27,6 +31,15 @@ _ROLE_TITLES = {
     "bear": "空头",
     "manager": "研究经理",
 }
+
+
+def _stub_args(name: str, ticker: str) -> Dict[str, Any]:
+    """离线桩为不同工具准备的最小参数集（有些工具需要额外参数）。"""
+    if name == "compare_peers":
+        return {"ticker": ticker, "peers": "000001,600036"}
+    if name == "filter_news":
+        return {"ticker": ticker, "keyword": "公告"}
+    return {"ticker": ticker}
 
 
 class ScriptedChatModel(BaseChatModel):
@@ -56,16 +69,17 @@ class ScriptedChatModel(BaseChatModel):
 
     # ---------------- 内部逻辑 ----------------
     def _respond(self, messages: List[BaseMessage]) -> AIMessage:
-        tool_result_seen = any(isinstance(m, ToolMessage) for m in messages)
-        if self.bound_tools and not tool_result_seen:
-            tool = self.bound_tools[0]
+        ticker = self.ticker or "600519"
+        done = sum(1 for m in messages if isinstance(m, ToolMessage))
+        if self.bound_tools and done < len(self.bound_tools):
+            tool = self.bound_tools[done]
             return AIMessage(
                 content="",
                 tool_calls=[
                     {
                         "name": tool.name,
-                        "args": {"ticker": self.ticker or "600519"},
-                        "id": "call_offline_1",
+                        "args": _stub_args(tool.name, ticker),
+                        "id": f"call_offline_{done + 1}",
                         "type": "tool_call",
                     }
                 ],
@@ -75,15 +89,13 @@ class ScriptedChatModel(BaseChatModel):
     def _final_text(self, messages: List[BaseMessage]) -> str:
         title = _ROLE_TITLES.get(self.role, self.role)
         ticker = self.ticker or "600519"
-        tool_output = ""
-        for m in messages:
-            if isinstance(m, ToolMessage):
-                tool_output = str(m.content)
+        outputs = [str(m.content).strip() for m in messages if isinstance(m, ToolMessage)]
+        tool_output = "\n".join(outputs) if outputs else ""
 
         if self.role in {"technical", "fundamental", "news"}:
             return (
                 f"## {title}分析（离线桩模型 · {ticker}）\n\n"
-                f"工具返回：{tool_output}\n\n"
+                f"共调用 {len(outputs)} 个工具，返回：\n{tool_output}\n\n"
                 f"结论：{title}信号中性，建议结合其他维度共同判断，等待进一步验证。\n\n"
                 "> 本段由离线桩模型生成，仅用于验证流程，不构成投资建议。"
             )
