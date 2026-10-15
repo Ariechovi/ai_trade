@@ -27,6 +27,11 @@ logger = logging.getLogger(__name__)
 DEFAULT_CACHE_DIR = Path(__file__).resolve().parent / ".cache"
 DEFAULT_CACHE_TTL = 3600  # 1 小时
 
+# 缓存结构版本：一旦改动数据抽取/字段口径，就把这个号 +1。
+# 否则旧缓存会在 TTL 内继续返回「旧逻辑的结果」，让人以为新代码没生效——
+# 这类问题极难排查。真实系统里这叫 cache schema version。
+CACHE_SCHEMA_VERSION = "v2"
+
 # 财务指标的格式化规则：金额转「亿」，比率保留两位并加 %。
 _AMOUNT_KEYS = {"revenue", "net_profit"}
 _PERCENT_KEYS = {"roe", "revenue_yoy", "profit_yoy", "debt_ratio", "gross_margin", "net_margin"}
@@ -63,7 +68,7 @@ class DataService:
     def _fetch(self, method: str, ticker: str, *args: Any, frame: bool = False) -> Any:
         errors: List[str] = []
         for source in self.sources:
-            cache_key = f"{source.name}:{method}:{ticker}:{args}"
+            cache_key = f"{CACHE_SCHEMA_VERSION}:{source.name}:{method}:{ticker}:{args}"
             cached = self.cache.get(cache_key)
             if cached is not None:
                 self.last_source[ticker] = f"{source.name}(缓存)"

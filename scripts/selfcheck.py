@@ -43,6 +43,7 @@ from src.agents.specs import ANALYSTS, ROLES  # noqa: E402
 from src.config import load_settings  # noqa: E402
 from src.graph import build_graph  # noqa: E402
 from src.offline_llm import ScriptedChatModel  # noqa: E402
+from src.prompts import ANALYST_PROMPTS, BEAR_SYSTEM, BULL_SYSTEM, MANAGER_SYSTEM  # noqa: E402
 from src.runner import run_case  # noqa: E402
 from src.tools import build_tools  # noqa: E402
 
@@ -135,7 +136,7 @@ def main() -> int:
 
     print("[2] 工具层")
     tool_map = build_tools(provider)
-    c.check("工具总数 ≥ 14", len(tool_map) >= 14, f"got={len(tool_map)}")
+    c.check("工具总数 = 18", len(tool_map) == 18, f"got={len(tool_map)}")
     out = tool_map["get_financial_statements"].invoke({"ticker": "600519"})
     c.check("工具返回非空文本", isinstance(out, str) and len(out) > 10)
 
@@ -332,15 +333,15 @@ def main() -> int:
     c.check("输出含均线与布林带", "MA20" in technical_text and "布林带" in technical_text)
 
     print("[16] 工具层：数量、归属、逐个可调用")
-    c.check("工具总数 ≥ 14", len(tool_map) >= 14, f"got={len(tool_map)}")
     c.check(
         "规格表里的工具名都存在",
         all(name in tool_map for spec in ANALYSTS for name in spec.tool_names),
     )
+    expected_tools = {"technical": 6, "fundamental": 8, "news": 4}
     for spec in ANALYSTS:
         c.check(
-            f"{spec.role} 工具数 ≥ 4",
-            len(spec.tool_names) >= 4,
+            f"{spec.role} 工具数 = {expected_tools[spec.role]}",
+            len(spec.tool_names) == expected_tools[spec.role],
             f"got={len(spec.tool_names)}",
         )
     c.check(
@@ -444,6 +445,28 @@ def main() -> int:
             f"{run_label}分支：三份报告都在 merge 之前（辩论不会缺料）",
             all(run_trace.index(f"report:{role}") < merge_at for role in ROLES),
         )
+
+    print("[19] 提示词与工具契约的结构完整性")
+    for key, text in ANALYST_PROMPTS.items():
+        c.check(f"{key} 契约含「你的任务」", "你的任务" in text)
+        c.check(f"{key} 契约含「不得写」反例", "不得写" in text)
+        c.check(f"{key} 契约含「输出结构」", "输出结构" in text)
+    c.check("基本面契约含口径规则", "口径" in ANALYST_PROMPTS["fundamental"])
+    c.check("基本面契约要求交叉验算", "交叉验算" in ANALYST_PROMPTS["fundamental"])
+    c.check("技术面契约要求检查零轴位置", "零轴" in ANALYST_PROMPTS["technical"])
+    c.check("消息面契约说明词典法局限", "词典规则法" in ANALYST_PROMPTS["news"])
+    c.check("多头契约禁止重复论点", "不要重复上一轮" in BULL_SYSTEM)
+    c.check("空头契约禁止重复论点", "不要重复上一轮" in BEAR_SYSTEM)
+    c.check("经理契约要求不和稀泥", "不要和稀泥" in MANAGER_SYSTEM)
+
+    contract_fields = ("何时使用", "何时不要用", "返回", "局限")
+    missing = [
+        f"{name}.{field}"
+        for name, tool_obj in tool_map.items()
+        for field in contract_fields
+        if field not in (tool_obj.description or "")
+    ]
+    c.check("每个工具的描述都含四段契约", not missing, "; ".join(missing)[:220])
 
     return 0 if c.summary() else 1
 

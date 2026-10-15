@@ -40,15 +40,44 @@ _EM_COLUMN_MAP = {
 
 _REQUIRED = ("date", "open", "high", "low", "close", "volume")
 
-# 财务序列要抽取的指标（key → 匹配关键词）
-_SERIES_SPECS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
-    ("roe", ("净资产收益率",)),
-    ("revenue", ("营业总收入", "营业收入")),
-    ("net_profit", ("归母净利润", "净利润")),
-    ("debt_ratio", ("资产负债率",)),
-    ("gross_margin", ("销售毛利率", "毛利率")),
-    ("net_margin", ("销售净利率", "净利率")),
-    ("eps", ("基本每股收益", "每股收益")),
+# 财务序列要抽取的指标：(key, 匹配关键词, 排除关键词)
+# akshare 的财务摘要按「常用指标 / 每股指标 / 盈利能力 / 收益质量 / 成长能力 /
+# 财务风险 / 营运能力」分块，同一指标名会出现多次——所以先出现的先被认领，
+# 并且对「净利润」这种会被「归母净利润」误匹配的名字加排除词。
+_SERIES_SPECS: Tuple[Tuple[str, Tuple[str, ...], Tuple[str, ...]], ...] = (
+    # 利润与规模
+    ("revenue", ("营业总收入", "营业收入"), ()),
+    ("net_profit", ("归母净利润",), ()),
+    ("net_profit_total", ("净利润",), ("归母", "扣非")),
+    ("deducted_profit", ("扣非净利润",), ()),
+    ("operating_cashflow", ("经营现金流量净额",), ()),
+    ("equity", ("股东权益合计",), ()),
+    ("goodwill", ("商誉",), ()),
+    # 成长能力
+    ("revenue_yoy", ("营业总收入增长率", "营业收入增长率"), ()),
+    ("profit_yoy", ("归属母公司净利润增长率", "归母净利润增长率"), ()),
+    # 盈利能力
+    ("roe", ("净资产收益率",), ()),
+    ("roa", ("总资产报酬率",), ()),
+    ("gross_margin", ("毛利率",), ()),
+    ("net_margin", ("销售净利率",), ()),
+    ("expense_ratio", ("期间费用率",), ()),
+    # 收益质量（利润含金量）
+    ("ocf_to_profit", ("净现金/归属", "净现金/母公司"), ()),
+    ("ocf_to_revenue", ("经营性现金净流量/营业总收入", "经营活动净现金/销售收入"), ()),
+    # 财务风险
+    ("debt_ratio", ("资产负债率",), ()),
+    ("equity_multiplier", ("权益乘数",), ("少数",)),
+    ("current_ratio", ("流动比率",), ()),
+    ("quick_ratio", ("速动比率",), ("保守",)),
+    # 营运能力
+    ("total_asset_turnover", ("总资产周转率",), ()),
+    ("receivable_turnover", ("应收账款周转率",), ()),
+    ("inventory_turnover", ("存货周转率",), ()),
+    # 每股
+    ("eps", ("基本每股收益",), ()),
+    ("bps", ("每股净资产",), ("摊薄", "调整", "最新")),
+    ("ocf_per_share", ("每股经营现金流",), ()),
 )
 
 
@@ -227,9 +256,11 @@ class AkshareDataSource(BaseDataSource):
         label_col = "指标" if "指标" in raw.columns else raw.columns[1]
         rows = [(str(row.get(label_col, "")).strip(), row) for _, row in raw.iterrows()]
         series: Dict[str, Dict[str, Any]] = {}
-        for key, keywords in _SERIES_SPECS:
+        for key, keywords, excludes in _SERIES_SPECS:
             for label, row in rows:
                 if not any(keyword in label for keyword in keywords):
+                    continue
+                if excludes and any(bad in label for bad in excludes):
                     continue
                 values: Dict[str, Any] = {}
                 for period in period_cols:

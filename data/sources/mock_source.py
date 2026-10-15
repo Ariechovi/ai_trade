@@ -149,14 +149,35 @@ class MockDataSource(BaseDataSource):
         base = self._base(ticker)
         labels = _period_labels(max(2, int(periods)))
         rng = np.random.default_rng(_seed(ticker))
+        revenue = base["price"] * 1.2e9 / 100.0
+        net_profit = base["price"] * 3.0e8 / 100.0
         anchors = {
+            "revenue": revenue,
+            "net_profit": net_profit,
+            "net_profit_total": net_profit * 1.08,
+            "deducted_profit": net_profit * 0.95,
+            "operating_cashflow": net_profit * 1.15,
+            "equity": revenue * 0.45,
+            "goodwill": revenue * 0.02,
+            "revenue_yoy": base["revenue_yoy"],
+            "profit_yoy": base["profit_yoy"],
             "roe": base["roe"],
-            "revenue": base["price"] * 1.2e9 / 100.0,
-            "net_profit": base["price"] * 3.0e8 / 100.0,
-            "debt_ratio": base["debt_ratio"],
+            "roa": base["roe"] * 0.4,
             "gross_margin": 30.0 + (_seed(ticker) % 400) / 10.0,
             "net_margin": 8.0 + (_seed(ticker) % 200) / 10.0,
+            "expense_ratio": 15.0 + (_seed(ticker) % 150) / 10.0,
+            "ocf_to_profit": 1.0 + (_seed(ticker) % 80) / 100.0,
+            "ocf_to_revenue": 0.05 + (_seed(ticker) % 200) / 1000.0,
+            "debt_ratio": base["debt_ratio"],
+            "equity_multiplier": round(1.0 / max(0.05, 1.0 - base["debt_ratio"] / 100.0), 3),
+            "current_ratio": round(1.0 + (_seed(ticker) % 200) / 100.0, 3),
+            "quick_ratio": round(0.6 + (_seed(ticker) % 150) / 100.0, 3),
+            "total_asset_turnover": round(0.3 + (_seed(ticker) % 120) / 100.0, 3),
+            "receivable_turnover": round(3.0 + (_seed(ticker) % 300) / 10.0, 3),
+            "inventory_turnover": round(1.0 + (_seed(ticker) % 500) / 10.0, 3),
             "eps": round(base["price"] / 30.0, 2),
+            "bps": round(base["price"] / 3.0, 2),
+            "ocf_per_share": round(base["price"] / 25.0, 2),
         }
         series: Dict[str, Dict[str, Any]] = {}
         for key, anchor in anchors.items():
