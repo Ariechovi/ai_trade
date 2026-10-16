@@ -40,6 +40,7 @@ from .agents.manager import make_manager_node
 from .agents.researchers import make_bear_node, make_bull_node
 from .agents.specs import ANALYSTS
 from .config import Settings
+from .observe import TimedNode
 from .resilience import GuardedNode
 from .state import AgentState
 
@@ -74,6 +75,14 @@ def build_graph(*, llm_factory, tool_map: Dict[str, Any], settings: Settings):
             base_delay=settings.retry_base_delay,
         )
 
+    def timed(node, label=None):
+        """给节点加耗时统计。
+
+        放在 guarded **外面**——这样耗时里包含重试等待，
+        一个耗时 30 秒的节点你能看出是因为它重试过。
+        """
+        return TimedNode(node, label=label)
+
     graph = StateGraph(AgentState)
 
     # ---------------- 1. 分析师：LLM 节点 + 工具节点 + 报告节点 ----------------
@@ -81,22 +90,26 @@ def build_graph(*, llm_factory, tool_map: Dict[str, Any], settings: Settings):
     for spec in ANALYSTS:
         graph.add_node(
             spec.role,
-            guarded(
-                AnalystLLMNode(spec, llm_factory(spec.role), tool_map, max_tool_calls)
+            timed(
+                guarded(
+                    AnalystLLMNode(spec, llm_factory(spec.role), tool_map, max_tool_calls)
+                )
             ),
         )
-        graph.add_node(f"tools_{spec.role}", guarded(AnalystToolsNode(spec, tool_map)))
-        graph.add_node(f"msg_clear_{spec.role}", AnalystReportNode(spec))  # 纯函数，不套
+        graph.add_node(
+            f"tools_{spec.role}", timed(guarded(AnalystToolsNode(spec, tool_map)))
+        )
+        graph.add_node(f"msg_clear_{spec.role}", timed(AnalystReportNode(spec)))
 
     # ---------------- 2. 其余节点 ----------------
     # merge 必须 defer=True：默认情况下 LangGraph 在「任一入边到达」时就执行节点，
     # 三个分析师的循环长度往往不同（真实 LLM 一次可能返回多个 tool_calls），
     # 于是 merge 会被触发三次、辩论拿不到完整报告。defer=True 让它等齐所有入边。
-    graph.add_node("merge", _merge_node, defer=True)
-    graph.add_node("manager", guarded(make_manager_node(llm_factory)))
+    graph.add_node("merge", timed(_merge_node, "merge"), defer=True)
+    graph.add_node("manager", timed(guarded(make_manager_node(llm_factory))))
     if rounds > 0:
-        graph.add_node("bull", guarded(make_bull_node(llm_factory)))
-        graph.add_node("bear", guarded(make_bear_node(llm_factory)))
+        graph.add_node("bull", timed(guarded(make_bull_node(llm_factory))))
+        graph.add_node("bear", timed(guarded(make_bear_node(llm_factory))))
 
     # ---------------- 3. 分析师的边（含工具循环的回边）----------------
     for spec in ANALYSTS:

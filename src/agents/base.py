@@ -50,13 +50,20 @@ def complete(llm: Any, system_prompt: str, user_prompt: str) -> str:
 
     研究员与经理不需要工具，所以它们只需要这一步，不需要任何循环。
     """
-    response = llm.invoke(
+    return extract_text(complete_message(llm, system_prompt, user_prompt))
+
+
+def complete_message(llm: Any, system_prompt: str, user_prompt: str) -> Any:
+    """与 complete() 相同，但返回**原始响应**。
+
+    需要记录 token 用量（usage_metadata 在响应对象上）的调用方用这个版本。
+    """
+    return llm.invoke(
         [
             SystemMessage(content=system_prompt),
             HumanMessage(content=user_prompt),
         ]
     )
-    return extract_text(response)
 
 
 def call_llm_once(llm: Any, tool_map: Dict[str, Any], messages: List[Any]) -> Any:

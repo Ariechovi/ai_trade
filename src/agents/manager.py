@@ -10,11 +10,13 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any, Callable, Dict
 
 from .. import prompts
+from ..observe import emit_event, llm_call_record
 from ..resilience import error_record
-from .base import complete
+from .base import complete_message, extract_text
 
 DEGRADED_DECISION = (
     "## 最终结论（降级）\n\n"
@@ -34,8 +36,24 @@ class ManagerNode:
         return "manager"
 
     def __call__(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        text = complete(self.llm, prompts.MANAGER_SYSTEM, prompts.manager_user_prompt(state))
-        return {"final_decision": text, "trace": ["manager"]}
+        emit_event("研究经理：正在综合三份报告与辩论", role="manager")
+        started = time.perf_counter()
+        response = complete_message(
+            self.llm, prompts.MANAGER_SYSTEM, prompts.manager_user_prompt(state)
+        )
+        elapsed_ms = (time.perf_counter() - started) * 1000.0
+        return {
+            "final_decision": extract_text(response),
+            "llm_calls": [
+                llm_call_record(
+                    role="manager",
+                    stage="manager",
+                    duration_ms=elapsed_ms,
+                    message=response,
+                )
+            ],
+            "trace": ["manager"],
+        }
 
     def degrade(self, state: Dict[str, Any], exc: BaseException) -> Dict[str, Any]:
         return {

@@ -44,7 +44,7 @@ from src.config import load_settings  # noqa: E402
 from src.graph import build_graph  # noqa: E402
 from src.offline_llm import ScriptedChatModel  # noqa: E402
 from src.prompts import ANALYST_PROMPTS, BEAR_SYSTEM, BULL_SYSTEM, MANAGER_SYSTEM  # noqa: E402
-from src.runner import run_case  # noqa: E402
+from src.runner import run_case, summarize  # noqa: E402
 from src.tools import build_tools  # noqa: E402
 
 DATE = "2026-10-11"
@@ -467,6 +467,83 @@ def main() -> int:
         if field not in (tool_obj.description or "")
     ]
     c.check("每个工具的描述都含四段契约", not missing, "; ".join(missing)[:220])
+
+    print("[20] 可观测性：节点耗时与 LLM 调用都被记录")
+    timings = state.get("node_timings") or []
+    calls = state.get("llm_calls") or []
+    c.check("state 里有 node_timings", bool(timings))
+    c.check("state 里有 llm_calls", bool(calls))
+    c.check(
+        "耗时记录数不少于 trace 条数",
+        len(timings) >= len(trace),
+        f"timings={len(timings)} trace={len(trace)}",
+    )
+    timing_names = {t.get("node") for t in timings}
+    c.check(
+        "耗时表覆盖 LLM / 工具 / 报告 / merge / manager",
+        {"llm:technical", "tools:technical", "report:technical", "merge", "manager"}
+        <= timing_names,
+        f"got={sorted(timing_names)[:6]}…",
+    )
+    c.check(
+        "每条 LLM 记录都含耗时与 token 字段",
+        all(
+            {"input_tokens", "output_tokens", "total_tokens", "duration_ms"} <= set(c)
+            for c in calls
+        ),
+    )
+    summary = summarize(state)
+    c.check("summarize 能按角色聚合", set(summary["by_role"]) >= set(ROLES))
+    c.check(
+        "summarize 的 token 合计等于逐条之和",
+        summary["total_tokens"] == sum(int(c.get("total_tokens") or 0) for c in calls),
+    )
+
+    print("[21] akshare 源：同一份上游数据只请求一次（进程内 memo）")
+
+    class CountingAk:
+        """假的 akshare 模块，只统计被调了几次。"""
+
+        def __init__(self) -> None:
+            self.calls: List[str] = []
+
+        def stock_zh_a_daily(self, symbol: str, adjust: str):
+            self.calls.append("hist")
+            dates = pd.bdate_range(end=pd.Timestamp.today().normalize(), periods=200)
+            return pd.DataFrame(
+                {
+                    "date": dates,
+                    "open": 1.0,
+                    "high": 1.1,
+                    "low": 0.9,
+                    "close": 1.0,
+                    "volume": 1_000_000.0,
+                }
+            )
+
+        def stock_financial_abstract(self, symbol: str):
+            self.calls.append("fin")
+            return pd.DataFrame(
+                {
+                    "选项": ["常用指标", "常用指标"],
+                    "指标": ["归母净利润", "营业总收入"],
+                    "20260630": [1.0, 2.0],
+                }
+            )
+
+    from data.sources.akshare_source import AkshareDataSource  # noqa: E402
+
+    counting = AkshareDataSource.__new__(AkshareDataSource)  # 跳过 __init__ 里的 import
+    counting._ak = CountingAk()
+    counting._memo = {}
+    counting.get_price_history("600519", 60)
+    counting.get_price_history("600519", 120)  # 不同 days —— 不应再打网络
+    counting.get_financial_metrics("600519")
+    counting.get_financial_series("600519", 4)  # 复用同一张原始表
+    hist_calls = counting._ak.calls.count("hist")
+    fin_calls = counting._ak.calls.count("fin")
+    c.check("行情只请求 1 次（不同 days 复用同一份原始数据）", hist_calls == 1, f"got={hist_calls}")
+    c.check("财务摘要只请求 1 次（metrics 与 series 复用）", fin_calls == 1, f"got={fin_calls}")
 
     return 0 if c.summary() else 1
 

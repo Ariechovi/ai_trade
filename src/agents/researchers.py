@@ -15,11 +15,13 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any, Callable, Dict
 
 from .. import prompts
+from ..observe import emit_event, llm_call_record
 from ..resilience import error_record
-from .base import complete
+from .base import complete_message, extract_text
 
 
 class DebaterNode:
@@ -35,13 +37,31 @@ class DebaterNode:
         return f"debate:{self.side}"
 
     def __call__(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        text = complete(
-            self.llm, self.system_prompt, prompts.debate_user_prompt(state, self.side)
+        emit_event(
+            f"{'多头' if self.side == 'bull' else '空头'}研究员：模型思考中",
+            role=self.side,
         )
+        started = time.perf_counter()
+        response = complete_message(
+            self.llm,
+            self.system_prompt,
+            prompts.debate_user_prompt(state, self.side),
+        )
+        elapsed_ms = (time.perf_counter() - started) * 1000.0
         return {
-            "debate_history": [{"speaker": self.side, "content": text}],
+            "debate_history": [
+                {"speaker": self.side, "content": extract_text(response)}
+            ],
             "debate_count": 1,
             "last_speaker": self.side,
+            "llm_calls": [
+                llm_call_record(
+                    role=self.side,
+                    stage="debate",
+                    duration_ms=elapsed_ms,
+                    message=response,
+                )
+            ],
             "trace": [f"debate:{self.side}"],
         }
 

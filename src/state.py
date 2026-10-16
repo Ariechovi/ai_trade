@@ -71,5 +71,9 @@ class AgentState(TypedDict, total=False):
     # ---------- 容错：节点级失败的留痕（多节点各写各的键 → merge_dict 合并）----------
     _node_errors: Annotated[Dict[str, Any], merge_dict]
 
+    # ---------- 观测：每个节点的耗时、每次 LLM 调用的 token（都靠累加）----------
+    node_timings: Annotated[List[Dict[str, Any]], operator.add]
+    llm_calls: Annotated[List[Dict[str, Any]], operator.add]
+
     # ---------- 可观测性：记录走过的节点，方便演示"图跑了哪些步" ----------
     trace: Annotated[List[str], operator.add]

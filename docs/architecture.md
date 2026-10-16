@@ -392,3 +392,50 @@ V3 把这些放在 `ToolMetadata` 里（`when_to_use` / `when_not_to_use` / `ret
 
 - 宁可加「不得写」这种**具体反例**，也不要加「请务必仔细分析」这种**空泛要求**
 - 每条规则都应该能对应一个真实踩过的坑，否则删掉
+
+## 十三、可观测性：把"跑了多久、花了多少"变成数据
+
+对应 TradingAgents-CN 的 `core/agents/execution_trace_recorder.py`——
+V3 把 prompt、响应、工具调用、耗时写进执行轨迹并落库到 `workflow_agent_invocations`。
+
+### 采集：两个累加字段
+
+| 采什么 | 怎么采 | 存哪 |
+|---|---|---|
+| 节点耗时 | `observe.TimedNode` 包一层 | `state["node_timings"]` |
+| LLM token | 从响应的 `usage_metadata` 提取 | `state["llm_calls"]` |
+
+两者都是 `operator.add`——理由和 `trace` 一样：**多节点并行写同一个字段，
+必须累加而不是覆盖**。
+
+### 包装顺序：计时必须在护栏外面
+
+```python
+timed(guarded(node))     # ✅ 耗时含重试等待
+guarded(timed(node))     # ❌ GuardedNode 需要 node.degrade()，TimedNode 没有
+```
+
+这不只是顺序问题——**把耗时放在外面是有意的**：如果一个节点耗时 30 秒，
+你希望知道那 30 秒里包含了两次重试等待。放在里面就看不出来了。
+
+### 聚合：只有一个 summarizer
+
+`src/runner.py:summarize(state)` 是**唯一的聚合入口**，CLI 打印和 Streamlit 页面都用它。
+
+这一点值得强调：如果 CLI 自己算一遍 token、页面再算一遍，
+两边的口径迟早会不一致（一个算 total_tokens、一个算 input+output）。
+**聚合逻辑只能有一份。**
+
+### 一个容易忽略的指标口径
+
+`node_duration_ms` 是**累计节点耗时**，不是墙上时间——三个分析师并行时，
+它们的耗时会重叠。页面上必须写清这一点，否则数字会误导人（看着像 30 秒，
+实际墙上是 12 秒）。
+
+**凡是聚合指标，都要能回答"这个数的口径是什么"。**
+
+### 离线模式的诚实处理
+
+离线桩模型不返回 `usage_metadata`，所以 token 全是 0。
+这时**不能默默显示 0**——要明确写「离线桩模型没有 token 用量，换成真实模型即可看到」。
+这和数据层那条规则是同一个道理：**宁可显眼地承认没有，也不要让 0 看起来像真实统计。**

@@ -21,6 +21,8 @@ fetch_spot_data_em），这里沿用同样的思路：
 
 from __future__ import annotations
 
+import os
+import socket
 from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, List, Tuple
 
@@ -28,6 +30,10 @@ import pandas as pd
 
 from .base import BaseDataSource, DataSourceError
 
+# 底层 socket 超时（秒）。akshare 用 requests/urllib3，未显式传 timeout 时会退回
+# socket 默认值——不设上限的话，网络抖动会让它**无限挂起**（这就是"卡住"的根因）。
+# 可用环境变量 `AKSHARE_TIMEOUT` 覆盖。
+DEFAULT_TIMEOUT = 30.0
 # 东财日线接口的中文列名 → 标准列名（新浪接口本身就是英文列名）
 _EM_COLUMN_MAP = {
     "日期": "date",
@@ -126,10 +132,23 @@ class AkshareDataSource(BaseDataSource):
         except ImportError as exc:  # pragma: no cover - 环境问题
             raise DataSourceError(f"akshare 未安装：{exc}") from exc
         self._ak = ak
+        # 进程内 memo：同一个上游数据只拉一次（详见 _history_sina / _raw_financial）
+        self._memo: Dict[str, Any] = {}
+        socket.setdefaulttimeout(
+            float(os.getenv("AKSHARE_TIMEOUT", str(DEFAULT_TIMEOUT)))
+        )
 
     # ---------------- 行情：新浪 → 东财 ----------------
     def _history_sina(self, ticker: str, days: int) -> pd.DataFrame:
-        raw = self._ak.stock_zh_a_daily(symbol=_market_prefix(ticker), adjust="qfq")
+        # 新浪接口不支持按日期区间取数，每次都返回全量（6000+ 行）。
+        # 而不同工具用的 days 不同 → 文件缓存的 key 不同 → 同一只股票会被反复全量下载。
+        # 这里用进程内 memo 把「同一 ticker 的原始数据」合并成一次网络请求，本地再切片。
+        key = f"hist:sina:{ticker}"
+        if key not in self._memo:
+            self._memo[key] = self._ak.stock_zh_a_daily(
+                symbol=_market_prefix(ticker), adjust="qfq"
+            )
+        raw = self._memo[key]
         if raw is None or len(raw) == 0:
             raise DataSourceError("新浪接口未返回数据")
         return _normalize(raw, days, "新浪")
@@ -171,14 +190,25 @@ class AkshareDataSource(BaseDataSource):
         }
 
     # ---------------- 财务 ----------------
-    def _financial_rows(self, ticker: str) -> Dict[str, Any]:
-        try:
-            raw = self._ak.stock_financial_abstract(symbol=ticker)
-        except Exception as exc:
-            raise DataSourceError(f"akshare 取 {ticker} 财务摘要失败：{exc}") from exc
-        if raw is None or len(raw) == 0:
-            raise DataSourceError(f"akshare 未返回 {ticker} 的财务摘要")
+    def _raw_financial(self, ticker: str) -> pd.DataFrame:
+        """财务摘要原始表（进程内只拉一次）。
 
+        `get_financial_metrics` 与 `get_financial_series` 都要这张表，
+        不去重的话同一份数据会被拉 2~3 次——每个都是一次网络往返。
+        """
+        key = f"fin:{ticker}"
+        if key not in self._memo:
+            try:
+                raw = self._ak.stock_financial_abstract(symbol=ticker)
+            except Exception as exc:
+                raise DataSourceError(f"akshare 取 {ticker} 财务摘要失败：{exc}") from exc
+            if raw is None or len(raw) == 0:
+                raise DataSourceError(f"akshare 未返回 {ticker} 的财务摘要")
+            self._memo[key] = raw
+        return self._memo[key]
+
+    def _financial_rows(self, ticker: str) -> Dict[str, Any]:
+        raw = self._raw_financial(ticker)
         # 列形如：选项 | 指标 | 20260630 | 20260331 | ...
         period_cols = [c for c in raw.columns if str(c).isdigit() and len(str(c)) == 8]
         if not period_cols:
@@ -239,13 +269,7 @@ class AkshareDataSource(BaseDataSource):
 
     # ---------------- 多期财务 ----------------
     def get_financial_series(self, ticker: str, periods: int) -> Dict[str, Dict[str, Any]]:
-        try:
-            raw = self._ak.stock_financial_abstract(symbol=ticker)
-        except Exception as exc:
-            raise DataSourceError(f"akshare 取 {ticker} 财务序列失败：{exc}") from exc
-        if raw is None or len(raw) == 0:
-            raise DataSourceError(f"akshare 未返回 {ticker} 的财务摘要")
-
+        raw = self._raw_financial(ticker)
         period_cols = sorted(
             [c for c in raw.columns if str(c).isdigit() and len(str(c)) == 8],
             reverse=True,

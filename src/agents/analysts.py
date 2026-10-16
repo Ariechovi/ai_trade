@@ -25,11 +25,13 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any, Dict, List
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 from .. import prompts
+from ..observe import emit_event, llm_call_record, tool_call_names
 from ..resilience import error_record
 from .base import call_llm_once, execute_tool_calls, extract_text, tool_call_id
 from .specs import AnalystSpec
@@ -69,20 +71,35 @@ class AnalystLLMNode:
         history: List[Any] = list(state.get(self.spec.messages_field) or [])
         used = int(state.get(self.spec.tool_calls_field, 0))
         tools = {} if used >= self.max_tool_calls else self.tools
-        if history:
-            response = call_llm_once(self.llm, tools, history)
-            return {
-                self.spec.messages_field: [response],
-                "trace": [f"llm:{self.spec.role}"],
-            }
 
-        seed = [
-            SystemMessage(content=self.spec.system_prompt),
-            HumanMessage(content=prompts.analyst_user_prompt(self.spec.label, state)),
-        ]
-        response = call_llm_once(self.llm, tools, seed)
+        # 第一次进入用「系统提示词 + 用户问题」播种；之后接着已有的历史继续问。
+        seed: List[Any] = []
+        messages_in = history
+        if not history:
+            seed = [
+                SystemMessage(content=self.spec.system_prompt),
+                HumanMessage(content=prompts.analyst_user_prompt(self.spec.label, state)),
+            ]
+            messages_in = seed
+
+        # 先报进度再调模型：真实模型一次调用可能要等 30 秒以上
+        emit_event(
+            f"{self.spec.label}：模型思考中（第 {used + 1} 轮）", role=self.spec.role
+        )
+        started = time.perf_counter()
+        response = call_llm_once(self.llm, tools, messages_in)
+        elapsed_ms = (time.perf_counter() - started) * 1000.0
+
         return {
             self.spec.messages_field: seed + [response],
+            "llm_calls": [
+                llm_call_record(
+                    role=self.spec.role,
+                    stage="llm",
+                    duration_ms=elapsed_ms,
+                    message=response,
+                )
+            ],
             "trace": [f"llm:{self.spec.role}"],
         }
 
@@ -117,6 +134,13 @@ class AnalystToolsNode:
         history: List[Any] = list(state.get(self.spec.messages_field) or [])
         last = history[-1] if history else None
         calls = list(getattr(last, "tool_calls", None) or [])
+        names = tool_call_names(calls)
+        if names:
+            emit_event(
+                f"{self.spec.label}：执行工具 {', '.join(names)}",
+                role=self.spec.role,
+                tools=names,
+            )
         tool_messages = execute_tool_calls(self.tools, calls)
         return {
             self.spec.messages_field: tool_messages,
@@ -172,6 +196,10 @@ class AnalystReportNode:
             self.spec.report_field: text or FALLBACK_REPORT,
             "trace": [f"report:{self.spec.role}"],
         }
+
+    @property
+    def name(self) -> str:
+        return f"report:{self.spec.role}"
 
 
 class AnalystRouter:

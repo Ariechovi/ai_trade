@@ -90,6 +90,7 @@ mini-agents/
 │   ├── prompts/          # 提示词层：analysts / debaters / manager / templates
 │   ├── offline_llm.py    # 离线桩模型（保证无 Key 也能跑）
 │   ├── resilience.py     # 韧性层：重试 + 降级护栏
+│   ├── observe.py        # 可观测性：节点耗时 + LLM token 采集
 │   ├── runner.py         # 命令行入口
 │   └── agents/
 │       ├── specs.py      # ★ 分析师注册表：一个角色一条记录，全部设定在此
@@ -109,6 +110,8 @@ mini-agents/
 ├── scripts/
 │   ├── selfcheck.py      # 零依赖自检（不需要 pytest）
 │   └── inspect_messages.py  # 消息级观测：逐条打印工具调用
+├── ui/
+│   └── streamlit_app.py  # 可视化界面（输入 / 实时进度 / 结果 / token 与耗时）
 └── docs/
     └── architecture.md   # 架构详解与扩展练习
 ```
@@ -338,9 +341,59 @@ _node_errors -> {"technical": {"stage": "llm", "type": "RuntimeError", "message"
 多空契约里也加了「**不要重复上一轮论点**」——因为真实运行里多头连续两轮
 只重复同一句话，被空头当场点破「喊了三轮，骨牌至今没倒」。
 
+## 可视化界面（Streamlit）
+
+```powershell
+streamlit run ui/streamlit_app.py
+```
+
+页面分三块：
+
+| 区域 | 内容 |
+|---|---|
+| 左侧输入 | 股票代码 / 日期 / 辩论轮数 / 数据源 / 强制离线 |
+| 运行过程 | 实时显示每个节点完成情况（`stream_mode=["updates","values"]`） |
+| 结果 | 6 个 Tab：最终结论 / 技术面 / 基本面 / 消息面 / 辩论记录 / **运行指标** |
+
+「运行指标」里有：总耗时、LLM 调用次数、token 合计、**按角色汇总的 token 与耗时**、
+每个节点的耗时表、降级记录、节点执行轨迹。
+
+> 页面本身**不做任何分析逻辑**，只调用 `src.runner.stream_case`——
+> CLI 和页面共用同一条通路，不会出现两套实现。
+
+### 观测层是怎么来的
+
+| 采什么 | 怎么采 | 存在哪 |
+|---|---|---|
+| 节点耗时 | `observe.TimedNode` 包一层（放在 `GuardedNode` 外面，所以耗时含重试等待） | `state["node_timings"]` |
+| LLM token | 每次调用后从响应的 `usage_metadata` 提取 | `state["llm_calls"]` |
+
+两者都是 `operator.add` 累加字段，`src/runner.py:summarize()` 负责聚合——
+CLI 与页面共用这一个聚合函数，避免统计口径不一致。
+
+⚠️ **离线桩模型不返回 token**，离线跑出来是 0 并会明确提示；换成真实模型即可看到分布。
+
+### 遇到「卡住」怎么办
+
+akshare 要联网，慢是正常的。项目里做了三层处理：
+
+| 措施 | 解决什么 |
+|---|---|
+| **进程内 memo** | 同一 ticker 的行情 / 财务原始数据只拉一次（新浪接口返回全量 6000+ 行，不同 `days` 会重复下载） |
+| **socket 超时** | `AKSHARE_TIMEOUT`（默认 30 秒）——不设上限时，网络抖动会让 akshare **无限挂起** |
+| **实时进度事件** | 节点内部主动推「模型思考中 / 执行工具 X」，不用等节点完成才知道它在动 |
+
+实测（600519，本机）：冷缓存全流程 **8.2 秒**，热缓存 **3.9 秒**。
+
+如果还是慢，用下面的命令看是哪个工具在等：
+
+```bash
+python scripts/inspect_messages.py --ticker 600519
+```
+
 ## 验证
 
-### 自检：100/100 通过
+### 自检：107/107 通过
 
 ```bash
 python scripts/selfcheck.py
