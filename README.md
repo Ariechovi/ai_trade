@@ -1,7 +1,8 @@
 # mini-agents · 最小多智能体投研系统
 
-> 一个约 600 行的多智能体系统最小实现，核心设计是 **「工作流控制拓扑，Agent 控制内容」**。
+> 一个约 4,000 行的多智能体系统最小实现（核心编排约 600 行），核心设计是 **「工作流控制拓扑，Agent 控制内容」**。
 > 没有 API Key 也能离线跑通全流程（内置确定性桩模型）；有 Key 时一键切换 DeepSeek。
+> 结构上分成 `backend/`（Python 应用）与 `ui/`（前端），两者之间只有 HTTP。
 
 ## 这是什么
 
@@ -45,10 +46,19 @@
 
 ## 快速开始
 
+### 零、安装（一次即可）
+
+```bash
+pip install -r backend/requirements.txt
+```
+
+下面所有命令都在 `backend/` 目录里执行。
+
 ### 一、离线模式（无需 Key，开箱即跑）
 
 ```bash
-python -m src.runner --ticker 600519 --offline
+cd backend
+python cli.py --ticker 600519 --offline
 ```
 
 ### 二、接入 DeepSeek
@@ -56,7 +66,7 @@ python -m src.runner --ticker 600519 --offline
 ```bash
 cp .env.example .env          # Windows: copy .env.example .env
 # 在 .env 里填入 DEEPSEEK_API_KEY
-python -m src.runner --ticker 600519
+python cli.py --ticker 600519
 ```
 
 `.env` 关键项：
@@ -72,48 +82,35 @@ MAX_DEBATE_ROUNDS=2
 ### 三、常用参数
 
 ```bash
-python -m src.runner --ticker 000001 --rounds 0     # 不做辩论，直接给结论
-python -m src.runner --ticker 000001 --rounds 3     # 辩论 3 轮
-python -m src.runner --ticker 600519 --json         # 输出完整状态（便于二次处理）
-python -m src.runner --ticker 600519 --provider akshare   # 用真实数据源
+python cli.py --ticker 000001 --rounds 0     # 不做辩论，直接给结论
+python cli.py --ticker 000001 --rounds 3     # 辩论 3 轮
+python cli.py --ticker 600519 --json         # 输出完整状态（便于二次处理）
+python cli.py --ticker 600519 --provider akshare   # 用真实数据源
 ```
 
 ## 目录结构
 
 ```
 mini-agents/
-├── src/
-│   ├── graph.py          # ★ 从这里读起：整张图的形状
-│   ├── state.py          # 全局状态 + reducer（数据总线）
-│   ├── llm.py            # LLM 工厂（DeepSeek / 离线桩模型）
-│   ├── tools/            # 工具层：technical / fundamental / news 三个域
-│   ├── prompts/          # 提示词层：analysts / debaters / manager / templates
-│   ├── offline_llm.py    # 离线桩模型（保证无 Key 也能跑）
-│   ├── resilience.py     # 韧性层：重试 + 降级护栏
-│   ├── observe.py        # 可观测性：节点耗时 + LLM token 采集
-│   ├── runner.py         # 命令行入口
-│   └── agents/
-│       ├── specs.py      # ★ 分析师注册表：一个角色一条记录，全部设定在此
-│       ├── base.py       # LLM 调用的原子操作（不做循环）
-│       ├── analysts.py   # 分析师节点实现（LLM / 工具 / 报告 / 路由）
-│       ├── researchers.py# 多头 / 空头
-│       └── manager.py    # 研究经理
-├── data/
-│   ├── sources/          # 数据源适配：base / akshare_source / mock_source
-│   ├── indicators.py     # 技术指标计算（纯 pandas，公式可读）
-│   ├── cache.py          # 文件缓存
-│   ├── service.py        # 数据服务：多源优先级 + 降级 + 缓存
-│   └── fixtures/         # 离线样本数据
-├── eval/
-│   ├── cases.json        # 评测股票池
-│   └── run_eval.py       # 评测 / 消融脚本
-├── scripts/
-│   ├── selfcheck.py      # 零依赖自检（不需要 pytest）
-│   └── inspect_messages.py  # 消息级观测：逐条打印工具调用
-├── ui/
-│   └── streamlit_app.py  # 可视化界面（输入 / 实时进度 / 结果 / token 与耗时）
-└── docs/
-    └── architecture.md   # 架构详解与扩展练习
+├── backend/                  # ← Python 应用：所有命令都在这里执行
+│   ├── api/                  # 路由层：__init__ 聚合 api_router + 每域一个文件
+│   ├── common/               # 横切：deps / exception_handler / sse / state / observability / resilience
+│   ├── services/             # 任务编排（task_store / task_runner）+ 执行通路（runner / graph / llm）
+│   ├── agents/               # 角色：specs（注册表）/ base / analysts / researchers / manager
+│   ├── prompts/              # 提示词契约：analysts / debaters / manager / templates
+│   ├── tools/                # 工具层：technical / fundamental / news
+│   ├── data/                 # 数据层：sources / indicators / cache / service / fixtures
+│   ├── tests/                # pytest（conftest 统一断网，tests/api 覆盖 HTTP 层）
+│   ├── scripts/  eval/       # 开发脚本与评测（用 python -m scripts.x 运行）
+│   ├── main.py               # HTTP 入口：uvicorn main:app
+│   ├── cli.py                # 命令行入口
+│   ├── models.py             # 对外数据模型
+│   ├── settings.py           # 配置（读仓库根的 .env）
+│   ├── pytest.ini
+│   └── requirements.txt
+├── ui/streamlit_app.py       # 前端：只通过 HTTP 调后端，不 import 后端代码
+├── docs/architecture.md      # 架构详解与扩展练习
+└── .github/workflows/ci.yml  # 四档 Python 的 CI
 ```
 
 ## 读代码从哪开始
@@ -135,14 +132,14 @@ agents/base.py       ⑤ 最后看原子操作：到底怎么调 LLM、怎么执
 配合**运行时轨迹**读，比静态阅读快得多：
 
 ```bash
-python -m src.runner --ticker 600519 --offline      # 节点级轨迹
-python scripts/inspect_messages.py --ticker 600519  # 消息级细节
+python cli.py --ticker 600519 --offline               # 节点级轨迹
+python -m scripts.inspect_messages --ticker 600519    # 消息级细节
 ```
 
 ### 加一个分析师要改哪里？
 
-只有一处：在 [src/agents/specs.py](src/agents/specs.py) 的 `ANALYSTS` 里加一条记录。
-（外加 `state.py` 里补 3 个字段——这是 LangGraph 的静态约束，躲不掉。）
+只有一处：在 [backend/agents/specs.py](backend/agents/specs.py) 的 `ANALYSTS` 里加一条记录。
+（外加 `common/state.py` 里补 3 个字段——这是 LangGraph 的静态约束，躲不掉。）
 
 ## 三个核心设计
 
@@ -179,7 +176,7 @@ python scripts/inspect_messages.py --ticker 600519  # 消息级细节
 跑一次就能看到每一步：
 
 ```bash
-python -m src.runner --ticker 600519 --offline
+python cli.py --ticker 600519 --offline
 ```
 
 ```
@@ -344,6 +341,7 @@ _node_errors -> {"technical": {"stage": "llm", "type": "RuntimeError", "message"
 ## 可视化界面（Streamlit）
 
 ```powershell
+# 先起后端（另一个终端）：cd backend; uvicorn main:app --port 8100
 streamlit run ui/streamlit_app.py
 ```
 
@@ -358,8 +356,8 @@ streamlit run ui/streamlit_app.py
 「运行指标」里有：总耗时、LLM 调用次数、token 合计、**按角色汇总的 token 与耗时**、
 每个节点的耗时表、降级记录、节点执行轨迹。
 
-> 页面本身**不做任何分析逻辑**，只调用 `src.runner.stream_case`——
-> CLI 和页面共用同一条通路，不会出现两套实现。
+> 页面本身**不做任何分析逻辑**，只通过 HTTP 调后端的 `/api/analysis` 与事件流——
+> 它和后端是两个进程，中间只有 HTTP（与将来的 Vue 前端角色完全一致）。
 
 ### 观测层是怎么来的
 
@@ -388,22 +386,78 @@ akshare 要联网，慢是正常的。项目里做了三层处理：
 如果还是慢，用下面的命令看是哪个工具在等：
 
 ```bash
-python scripts/inspect_messages.py --ticker 600519
+python -m scripts.inspect_messages --ticker 600519
 ```
+
+### 取不到数据怎么办
+
+两条最常见的坑，都跟代码本身无关：
+
+**一、系统代理拦了国内数据源。** Windows 上配了系统代理（Clash / V2Ray 之类）时，
+Python 的 `requests` 会读到它 —— 而且**即使 `HTTP_PROXY` 环境变量是空的也会读到**，
+因为 urllib 在 Windows 上会去读注册表。于是对东财/新浪的请求也发给代理，表现是
+`ProxyError`，或者拿到空响应后的 `JSONDecodeError: No value to decode`。
+
+本项目已在 `data/sources/akshare_source.py` 里默认把国内行情域名（东财 / 新浪 / 交易所）
+加进 `NO_PROXY` 直连，一般不需要额外配置。V3 的 AGENTS.md 里也是同一条规矩。
+
+**二、股票代码本身取不到数据。** 退市股（例如 600001 邯郸钢铁）、指数、B 股
+用这套行情接口都取不到，表现是**两个源同时失败**。换个正常代码（600519 / 000001）
+先验证链路是否通。
+
+## HTTP API（可选）
+
+```bash
+# 依赖已包含在 requirements.txt 里，无需额外安装
+cd backend
+uvicorn main:app --port 8100
+# 打开 http://127.0.0.1:8100/docs
+```
+
+```bash
+curl -X POST http://127.0.0.1:8100/api/analysis/sync \
+  -H "Content-Type: application/json" \
+  -d '{"ticker":"600519","provider":"mock","offline":true}'
+```
+
+| 端点 | 说明 |
+|---|---|
+| `POST /api/analysis` | 创建任务，返回 **202** + `run_id`（任务在后台线程跑） |
+| `POST /api/analysis/sync` | 同步跑完直接返回结果（给 curl / 脚本用） |
+| `GET /api/analysis/{run_id}` | 任务详情（含结果与降级节点） |
+| `GET /api/analysis/{run_id}/events` | **SSE 事件流**，支持 `Last-Event-ID` 续传 |
+| `POST /api/analysis/{run_id}/cancel` | 请求取消（在节点边界生效） |
+| `GET /api/tasks` | 任务列表 / 过滤 / 分页 |
+
+三条设计约定：
+
+1. **API 是薄壳** —— 所有分析都走 `runner.stream_case`，CLI / Streamlit / HTTP 是同一条通路；
+2. **降级不是 HTTP 错误** —— 某个节点降级时仍是 200，信息在 `degraded` 字段里；
+   只有「所有数据源都失败」才返回 503；
+3. **进度是算出来的** —— `已完成节点 / 预估节点数`，不是手写的魔数。
+
+端口用 8100 而不是 8000，是为了和 TradingAgents-CN 那套（8000 / 3000）同时跑时不打架。
 
 ## 验证
 
-### 自检：107/107 通过
+### 测试：69 个用例，全程离线
 
 ```bash
-python scripts/selfcheck.py
+cd backend
+pytest -q                        # 全部用例（不需要 Key、不联网）
+pytest -m network                # 显式跑需要联网的用例
+python -m scripts.selfcheck      # 等价于 pytest -m "not network"
 ```
 
+`backend/tests/conftest.py` 里有一个 autouse fixture，**默认切断对外网络**（DNS 解析、
+create_connection、非环回的 connect）。任何偷偷联网的用例都会立刻红，而不是等到
+某台没有代理的机器上才失败 —— 这是「离线可复现」这个卖点的自动化证明。
+
 覆盖：配置降级、数据可复现、工具返回、端到端跑通、辩论计数严格等于「轮数 × 2」、
-并行扇入、不同标的数据不串味、工具循环每一步可见且顺序正确、工具轮数正确落库，
-**故障注入**下的重试 / 降级 / 不阻断 / 不死循环，以及数据层的
+并行扇入（等长 + **不等长**两个分支）、不同标的数据不串味、工具循环每一步可见且顺序正确、
+工具轮数正确落库，**故障注入**下的重试 / 降级 / 不阻断 / 不死循环，数据层的
 **指标公式正确性**（用已知序列反推 RSI、MA）、缓存命中与过期、多源降级、模拟数据标注，
-还有工具层的归属校验与**多轮工具循环**。
+以及 HTTP 层的路由注册、202 语义、SSE 顺序与续传、跨请求隔离、取消。
 
 ## 工具层：每个分析师 4~5 个真工具
 

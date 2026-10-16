@@ -1,0 +1,42 @@
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: 安装依赖
+        run: pip install -r backend/requirements.txt
+
+      - name: 结构不变量
+        run: |
+          # 前端只允许走 HTTP，不许 import 后端模块
+          if grep -rnE "^[[:space:]]*(from|import)[[:space:]]+(api|common|services|data|agents|prompts|tools|main|models|settings|cli)\b" --include="*.py" ui/; then
+            echo "::error::ui/ 不允许 import 后端模块，请通过 HTTP 调用"
+            exit 1
+          fi
+          # 不许再用 sys.path 兜底
+          if grep -rn "sys\.path" --include="*.py" .; then
+            echo "::error::不要用 sys.path 兜底，请从 backend/ 目录运行"
+            exit 1
+          fi
+          # 前端必须关掉 trust_env，否则系统代理会把本机请求拦掉（表现为 502）
+          if ! grep -q "trust_env=False" ui/streamlit_app.py; then
+            echo "::error::ui/ 里的 httpx 必须用 trust_env=False"
+            exit 1
+          fi
+
+      - name: 测试（离线，不联网）
+        working-directory: backend
+        run: pytest -q

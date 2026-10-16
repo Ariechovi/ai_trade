@@ -3,7 +3,16 @@ __pycache__/
 .env
 .venv/
 env/
-eval/results*.json
-data/.cache/
+
+# 缓存与构建产物
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+backend/data/.cache/
+
+# 评测输出（要留档的基线请放 backend/eval/baselines/）
+backend/eval/results*.json
+
 .idea/
 .vscode/

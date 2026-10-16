@@ -66,8 +66,8 @@ graph.add_conditional_edges("bear", make_router(threshold, after_bull=False), ["
 
 配合运行时轨迹读会快很多：
 
-- `python -m src.runner --ticker 600519 --offline` —— 节点级轨迹
-- `python scripts/inspect_messages.py --ticker 600519` —— 消息级细节
+- `python cli.py --ticker 600519 --offline` —— 节点级轨迹
+- `python -m scripts.inspect_messages --ticker 600519` —— 消息级细节
 
 ## 六、扩展练习（难度递增）
 
