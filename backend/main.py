@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI
@@ -18,9 +17,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from api import api_router
 from common.deps import get_settings
 from common.exception_handler import install_error_handlers
-from data.service import DEFAULT_CACHE_DIR
+from services.pg_store import PgTaskStore
+from services.store import StoreProtocol
 from services.task_runner import TaskRunner
-from services.task_store import TaskStore
 from settings import APP_VERSION, Settings
 
 
@@ -29,22 +28,19 @@ class ApiContext:
     """应用级上下文：配置 + 任务存储 + 执行器（执行器内含事件总线）。"""
 
     settings: Settings
-    store: TaskStore
+    store: StoreProtocol
     runner: TaskRunner
 
 
-def resolve_db_path(settings: Settings) -> Path:
-    """任务库位置：显式配置优先，否则落在用户级缓存目录（不写进项目目录）。"""
-    if settings.run_db_path:
-        return Path(settings.run_db_path)
-    return DEFAULT_CACHE_DIR / "runs.sqlite3"
-
-
 def create_app(
-    settings: Optional[Settings] = None, *, db_path: Optional[Path] = None
+    settings: Optional[Settings] = None, *, store: Optional[StoreProtocol] = None
 ) -> FastAPI:
+    """组装应用。
+
+    `store` 可注入 —— 便于测试塞替身，也便于将来换存储。
+    """
     settings = settings or get_settings()
-    store = TaskStore(db_path or resolve_db_path(settings))
+    store = store or PgTaskStore(settings)
     runner = TaskRunner(store, settings, max_concurrent=settings.max_concurrent_runs)
     ctx = ApiContext(settings=settings, store=store, runner=runner)
     # 启动即自愈：把上次残留的 running 任务标记为 interrupted（进程被杀时没人标记）

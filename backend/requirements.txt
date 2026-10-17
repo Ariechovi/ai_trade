@@ -16,5 +16,10 @@ httpx>=0.27
 # ---- Streamlit 界面 ----
 streamlit>=1.30
 
+# ---- 存储层（PostgreSQL）----
+# psycopg[binary] 自带预编译驱动，不用先装 libpq
+psycopg[binary]>=3.2
+psycopg-pool>=3.2
+
 # ---- 开发与测试 ----
 pytest>=8

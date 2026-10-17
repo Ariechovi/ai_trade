@@ -23,7 +23,7 @@ from agents.specs import ROLES
 from data import get_data_service
 from services.graph import node_label
 from services.runner import stream_case, summarize
-from services.task_store import TaskStore
+from services.store import StoreProtocol
 from settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -73,7 +73,7 @@ class EventBus:
     先落库这一步很关键：它保证「推送时不在线的客户端」还能靠 Last-Event-ID 补回来。
     """
 
-    def __init__(self, store: TaskStore) -> None:
+    def __init__(self, store: StoreProtocol) -> None:
         self._store = store
         self._subs: Dict[str, List[queue.Queue]] = {}
         self._lock = threading.Lock()
@@ -102,7 +102,7 @@ class EventBus:
 
 class TaskRunner:
     def __init__(
-        self, store: TaskStore, settings: Settings, *, max_concurrent: int = 2
+        self, store: StoreProtocol, settings: Settings, *, max_concurrent: int = 2
     ) -> None:
         self.store = store
         self.settings = settings
@@ -144,7 +144,6 @@ class TaskRunner:
             run_id,
             ticker=req.ticker,
             trade_date=trade_date,
-            rounds=int(settings.max_debate_rounds),
             params=req.model_dump(mode="json"),
         )
         with self._lock:

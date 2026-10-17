@@ -68,11 +68,27 @@ class Settings:
     max_concurrent_runs: int = 2
     sse_heartbeat_seconds: int = 10
     sse_max_idle_seconds: int = 300
-    run_db_path: str = ""
+
+    # ---- 存储层（PostgreSQL，唯一实现，没有 SQLite 回退）----
+    pg_host: str = ""                    # SSH 隧道场景下填 127.0.0.1
+    pg_port: int = 5432                  # SSH 隧道场景下填**本地转发端口**
+    pg_db: str = ""
+    pg_user: str = ""
+    pg_password: str = ""
+    pg_sslmode: str = "prefer"           # 走隧道时 disable 也行；prefer 更稳
+    pg_connect_timeout: int = 5          # 远程连接不能无限等
+    pg_statement_timeout_ms: int = 10000 # 单条语句上限，防止拖死应用
+    pg_pool_min: int = 1                 # 连接池下限
+    pg_pool_max: int = 4                 # 连接池上限：远程连接是稀缺资源
 
     @property
     def has_api_key(self) -> bool:
         return bool(self.llm_api_key)
+
+    @property
+    def pg_configured(self) -> bool:
+        """是否填了 PG 连接信息（填了才算启用）。"""
+        return bool(self.pg_host and self.pg_db)
 
 
 def load_settings(
@@ -111,5 +127,14 @@ def load_settings(
         max_concurrent_runs=max(1, _env_int("MAX_CONCURRENT_RUNS", 2)),
         sse_heartbeat_seconds=max(1, _env_int("SSE_HEARTBEAT_SECONDS", 10)),
         sse_max_idle_seconds=max(5, _env_int("SSE_MAX_IDLE_SECONDS", 300)),
-        run_db_path=_env("RUN_DB_PATH"),
+        pg_host=_env("PG_HOST"),
+        pg_port=_env_int("PG_PORT", 5432),
+        pg_db=_env("PG_DB"),
+        pg_user=_env("PG_USER"),
+        pg_password=_env("PG_PASSWORD"),
+        pg_sslmode=_env("PG_SSLMODE", "prefer"),
+        pg_connect_timeout=_env_int("PG_CONNECT_TIMEOUT", 5),
+        pg_statement_timeout_ms=_env_int("PG_STATEMENT_TIMEOUT_MS", 10000),
+        pg_pool_min=max(1, _env_int("PG_POOL_MIN", 1)),
+        pg_pool_max=max(1, _env_int("PG_POOL_MAX", 4)),
     )

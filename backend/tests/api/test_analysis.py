@@ -42,21 +42,21 @@ def test_rounds_can_override_env(api_client):
     assert len(body["debate_history"]) == 2
 
 
-def test_api_key_is_enforced_when_configured(tmp_path):
+def test_api_key_is_enforced_when_configured(pg_settings, clean_db):
     """留空 = 不校验（本机开发）；配置了就严格要求。"""
     from dataclasses import replace
 
     from fastapi.testclient import TestClient
 
     from main import create_app
-    from settings import load_settings
 
     settings = replace(
-        load_settings(offline=True, rounds=0),
-        run_db_path=str(tmp_path / "runs.sqlite3"),
+        pg_settings,
+        offline=True,
+        max_debate_rounds=0,
         api_key="secret-key",
     )
-    with TestClient(create_app(settings, db_path=tmp_path / "runs.sqlite3")) as client:
+    with TestClient(create_app(settings)) as client:
         assert client.get("/api/tasks").status_code == 401
         assert client.get("/api/tasks", headers={"X-API-Key": "wrong"}).status_code == 401
         ok = client.get("/api/tasks", headers={"X-API-Key": "secret-key"})
